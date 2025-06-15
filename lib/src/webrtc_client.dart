@@ -1,9 +1,10 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
-import 'package:talklynk_sdk/talklynk_sdk.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:talklynk_sdk/talklynk_sdk.dart';
 
 class WebRTCClient {
   final TalklynkSdkConfig config;
@@ -106,11 +107,11 @@ class WebRTCClient {
           break;
         case IceCandidateGenerated:
           final e = event as IceCandidateGenerated;
-          _sendIceCandidate(e.userId, e.candidate);
+          //  _sendIceCandidate(e.userId, e.candidate);
           break;
         case AnswerCreated:
           final e = event as AnswerCreated;
-          _sendAnswer(e.userId, e.answer);
+          //_sendAnswer(e.userId, e.answer);
           break;
       }
     });
@@ -178,40 +179,6 @@ class WebRTCClient {
       return Room.fromJson(response);
     } catch (e) {
       throw WebRTCException('Failed to get room: $e');
-    }
-  }
-
-  Future<JoinRoomResult> joinRoom(String roomId) async {
-    try {
-      final response = await _httpClient.post('/rooms/$roomId/join', {});
-
-      final room = Room.fromJson(response['room']);
-      final participantsData = response['participants'] as List? ?? [];
-      final participants =
-          participantsData.map((json) => Participant.fromJson(json)).toList();
-
-      _wsService.subscribeToRoom(roomId);
-      _joinedRooms.add(roomId);
-
-      final result = JoinRoomResult(room: room, participants: participants);
-      _eventController.add(WebRTCClientEvent.roomJoined(result));
-
-      return result;
-    } catch (e) {
-      throw WebRTCException('Failed to join room: $e');
-    }
-  }
-
-  Future<void> leaveRoom(String roomId) async {
-    try {
-      await _httpClient.post('/rooms/$roomId/leave', {});
-
-      _wsService.unsubscribeFromRoom(roomId);
-      _joinedRooms.remove(roomId);
-
-      _eventController.add(WebRTCClientEvent.roomLeft(roomId));
-    } catch (e) {
-      throw WebRTCException('Failed to leave room: $e');
     }
   }
 
@@ -286,29 +253,175 @@ class WebRTCClient {
     _eventController.add(WebRTCClientEvent.callEnded(roomId));
   }
 
-  // Chat Management
+  Future<JoinRoomResult> joinRoom(String roomId, {int? userId}) async {
+    try {
+      if (userId == null && _currentUser?.id == null) {
+        throw WebRTCException(
+            'User ID must be provided or current user must be set');
+      }
+
+      final joinOptions = JoinRoomOptions(
+        userId: userId ?? _currentUser!.id,
+      );
+
+      final response =
+          await _httpClient.post('/rooms/$roomId/join', joinOptions.toJson());
+
+      // Handle both response formats
+      final roomData = response['room'] ?? response['data']['room'] ?? response;
+      final participantsData =
+          response['participants'] ?? response['data']['participants'] ?? [];
+
+      final room = Room.fromJson(roomData);
+      final participants = (participantsData as List)
+          .map((json) => Participant.fromJson(json))
+          .toList();
+
+      _wsService.subscribeToRoom(roomId);
+      _joinedRooms.add(roomId);
+
+      final result = JoinRoomResult(room: room, participants: participants);
+      _eventController.add(WebRTCClientEvent.roomJoined(result));
+
+      return result;
+    } catch (e) {
+      throw WebRTCException('Failed to join room: $e');
+    }
+  }
+
+  Future<void> leaveRoom(String roomId, {int? userId}) async {
+    try {
+      if (userId == null && _currentUser?.id == null) {
+        throw WebRTCException(
+            'User ID must be provided or current user must be set');
+      }
+
+      final leaveData = {
+        'user_id': userId ?? _currentUser!.id,
+      };
+
+      await _httpClient.post('/rooms/$roomId/leave', leaveData);
+
+      _wsService.unsubscribeFromRoom(roomId);
+      _joinedRooms.remove(roomId);
+
+      _eventController.add(WebRTCClientEvent.roomLeft(roomId));
+    } catch (e) {
+      throw WebRTCException('Failed to leave room: $e');
+    }
+  }
+
   Future<ChatMessage> sendMessage(
       String roomId, SendMessageOptions options) async {
     try {
       Map<String, dynamic> response;
 
       if (options.filePath != null) {
-        // Upload file
+        // Upload file with additional fields
         final file = File(options.filePath!);
-        response =
-            await _httpClient.uploadFile('/rooms/$roomId/messages', file);
+        final additionalFields = <String, String>{
+          'user_id': options.userId.toString(),
+          'type': options.type.name,
+        };
+
+        if (options.message != null) {
+          additionalFields['message'] = options.message!;
+        }
+
+        if (options.metadata != null) {
+          additionalFields['metadata'] = jsonEncode(options.metadata);
+        }
+
+        response = await _httpClient.uploadFile(
+          '/rooms/$roomId/messages',
+          file,
+          additionalFields: additionalFields,
+        );
       } else {
         // Send text message
-        response = await _httpClient.post('/rooms/$roomId/messages', {
-          'message': options.message,
-          'type': options.type.name,
-          'metadata': options.metadata,
-        });
+        response =
+            await _httpClient.post('/rooms/$roomId/messages', options.toJson());
       }
 
-      return ChatMessage.fromJson(response);
+      // Handle wrapped response
+      final messageData = response['data'] ?? response;
+      return ChatMessage.fromJson(messageData);
     } catch (e) {
       throw WebRTCException('Failed to send message: $e');
+    }
+  }
+
+  Future<void> sendTypingIndicator(String roomId, bool typing,
+      {int? userId}) async {
+    try {
+      if (userId == null && _currentUser?.id == null) {
+        throw WebRTCException(
+            'User ID must be provided or current user must be set');
+      }
+
+      await _httpClient.post('/rooms/$roomId/typing', {
+        'user_id': userId ?? _currentUser!.id,
+        'is_typing': typing,
+      });
+    } catch (e) {
+      // Don't throw for typing indicators, just log
+      print('Failed to send typing indicator: $e');
+    }
+  }
+
+// WebRTC Signaling
+  Future<void> _sendOffer(
+      int toUserId, RTCSessionDescription offer, String roomId) async {
+    final data = {
+      'from_user_id': _currentUser?.id,
+      'to_user_id': toUserId,
+      'offer': {
+        'type': offer.type,
+        'sdp': offer.sdp,
+      },
+    };
+
+    try {
+      await _httpClient.post('/rooms/$roomId/webrtc/offer', data);
+    } catch (e) {
+      print('Failed to send offer: $e');
+    }
+  }
+
+  Future<void> _sendAnswer(
+      int toUserId, RTCSessionDescription answer, String roomId) async {
+    final data = {
+      'from_user_id': _currentUser?.id,
+      'to_user_id': toUserId,
+      'answer': {
+        'type': answer.type,
+        'sdp': answer.sdp,
+      },
+    };
+
+    try {
+      await _httpClient.post('/rooms/$roomId/webrtc/answer', data);
+    } catch (e) {
+      print('Failed to send answer: $e');
+    }
+  }
+
+  Future<void> _sendIceCandidate(
+      int toUserId, RTCIceCandidate candidate, String roomId) async {
+    final data = {
+      'from_user_id': _currentUser?.id,
+      'to_user_id': toUserId,
+      'candidate': {
+        'candidate': candidate.candidate,
+        'sdpMLineIndex': candidate.sdpMLineIndex,
+        'sdpMid': candidate.sdpMid,
+      },
+    };
+
+    try {
+      await _httpClient.post('/rooms/$roomId/webrtc/ice-candidate', data);
+    } catch (e) {
+      print('Failed to send ICE candidate: $e');
     }
   }
 
@@ -321,68 +434,6 @@ class WebRTCClient {
       return messagesData.map((json) => ChatMessage.fromJson(json)).toList();
     } catch (e) {
       throw WebRTCException('Failed to get messages: $e');
-    }
-  }
-
-  Future<void> sendTypingIndicator(String roomId, bool typing) async {
-    try {
-      await _httpClient.post('/rooms/$roomId/typing', {'typing': typing});
-    } catch (e) {
-      // Don't throw for typing indicators
-      print('Failed to send typing indicator: $e');
-    }
-  }
-
-  // WebRTC Signaling
-  Future<void> _sendOffer(
-      int toUserId, RTCSessionDescription offer, String roomId) async {
-    final data = {
-      'room_id': roomId,
-      'to_user_id': toUserId,
-      'offer': {
-        'type': offer.type,
-        'sdp': offer.sdp,
-      },
-    };
-
-    try {
-      await _httpClient.post('/webrtc/offer', data);
-    } catch (e) {
-      print('Failed to send offer: $e');
-    }
-  }
-
-  Future<void> _sendAnswer(int toUserId, RTCSessionDescription answer) async {
-    final data = {
-      'to_user_id': toUserId,
-      'answer': {
-        'type': answer.type,
-        'sdp': answer.sdp,
-      },
-    };
-
-    try {
-      await _httpClient.post('/webrtc/answer', data);
-    } catch (e) {
-      print('Failed to send answer: $e');
-    }
-  }
-
-  Future<void> _sendIceCandidate(
-      int toUserId, RTCIceCandidate candidate) async {
-    final data = {
-      'to_user_id': toUserId,
-      'candidate': {
-        'candidate': candidate.candidate,
-        'sdpMLineIndex': candidate.sdpMLineIndex,
-        'sdpMid': candidate.sdpMid,
-      },
-    };
-
-    try {
-      await _httpClient.post('/webrtc/ice-candidate', data);
-    } catch (e) {
-      print('Failed to send ICE candidate: $e');
     }
   }
 

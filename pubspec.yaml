@@ -28,6 +28,8 @@ dependencies:
   file_picker: ^6.1.1
   image_picker: ^1.0.4
   permission_handler: ^11.2.0
+
+  shared_preferences: ^2.2.2
   
   # Utils
   uuid: ^4.2.1

@@ -5,7 +5,7 @@ import 'package:provider/provider.dart';
 import 'package:talklynk_sdk/talklynk_sdk.dart';
 
 void main() {
-  runApp(const MyApp());
+  runApp(ExampleTalkLynkApp());
 }
 
 class MyApp extends StatelessWidget {
@@ -16,9 +16,9 @@ class MyApp extends StatelessWidget {
     return ChangeNotifierProvider(
       create: (context) => WebRTCProvider(
         const TalklynkSdkConfig(
-          apiKey: 'your_api_key_here',
-          baseUrl: 'http://localhost:8000/api/sdk',
-          wsUrl: 'ws://localhost:6001',
+          apiKey: 'sk_wsoORYhld0tj800njSdIk31RYm2tKBt0',
+          baseUrl: 'https://sdk.talklynk.com/backend/api/sdk',
+          wsUrl: 'wss://ws.sdk.talklynk.com:443',
           enableLogs: true,
         ),
       ),
@@ -355,5 +355,229 @@ class _HomePageState extends State<HomePage> {
     _roomIdController.dispose();
     _userNameController.dispose();
     super.dispose();
+  }
+}
+
+class ExampleTalkLynkApp extends StatefulWidget {
+  @override
+  _ExampleTalkLynkAppState createState() => _ExampleTalkLynkAppState();
+}
+
+class _ExampleTalkLynkAppState extends State<ExampleTalkLynkApp> {
+  late WebRTCProvider _provider;
+  final String _apiKey = ''; // Replace with actual API key
+
+  @override
+  void initState() {
+    super.initState();
+
+    // Initialize with your API key
+    final config = TalklynkSdkConfig.development(
+      apiKey: _apiKey,
+      baseUrl: 'https://sdk.talklynk.com/backend/api/sdk',
+      wsUrl: 'wss://ws.sdk.talklynk.com:443',
+      enableLogs: true,
+    );
+
+    _provider = WebRTCProvider(config);
+
+    // Set current user (this should come from your authentication system)
+    _provider.setCurrentUser(User(
+      id: 1, // User ID from your system
+      name: 'John Doe',
+      email: 'john@example.com',
+    ));
+
+    // Connect to the service
+    _provider.connect();
+  }
+
+  @override
+  void dispose() {
+    _provider.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ChangeNotifierProvider.value(
+      value: _provider,
+      child: MaterialApp(
+        title: 'TalkLynk Demo',
+        home: Consumer<WebRTCProvider>(
+          builder: (context, provider, child) {
+            if (!provider.isConnected) {
+              return Scaffold(
+                body: Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      CircularProgressIndicator(),
+                      SizedBox(height: 16),
+                      Text('Connecting...'),
+                      if (provider.connectionError != null) ...[
+                        SizedBox(height: 16),
+                        Text(
+                          'Error: ${provider.connectionError}',
+                          style: TextStyle(color: Colors.red),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              );
+            }
+
+            if (provider.currentRoom == null) {
+              return RoomListScreen();
+            }
+
+            return RoomScreen();
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class RoomListScreen extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text('Rooms')),
+      body: Consumer<WebRTCProvider>(
+        builder: (context, provider, child) {
+          return Column(
+            children: [
+              Padding(
+                padding: EdgeInsets.all(16),
+                child: ElevatedButton(
+                  onPressed: () => _createRoom(context, provider),
+                  child: Text('Create Room'),
+                ),
+              ),
+              Expanded(
+                child: FutureBuilder<List<Room>>(
+                  future: provider.getRooms(),
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return Center(child: CircularProgressIndicator());
+                    }
+
+                    if (snapshot.hasError) {
+                      return Center(child: Text('Error: ${snapshot.error}'));
+                    }
+
+                    final rooms = snapshot.data ?? [];
+
+                    return ListView.builder(
+                      itemCount: rooms.length,
+                      itemBuilder: (context, index) {
+                        final room = rooms[index];
+                        return ListTile(
+                          title: Text(room.name),
+                          subtitle: Text('Type: ${room.type.name}'),
+                          onTap: () => provider.joinRoom(room.roomId),
+                        );
+                      },
+                    );
+                  },
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  void _createRoom(BuildContext context, WebRTCProvider provider) async {
+    final options = CreateRoomOptions(
+      name: 'Test Room ${DateTime.now().millisecondsSinceEpoch}',
+      type: RoomType.video,
+      maxParticipants: 10,
+    );
+
+    try {
+      final room = await provider.createRoom(options);
+      provider.joinRoom(room.roomId);
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to create room: $e')),
+      );
+    }
+  }
+}
+
+class RoomScreen extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Consumer<WebRTCProvider>(
+      builder: (context, provider, child) {
+        final room = provider.currentRoom!;
+
+        return Scaffold(
+          appBar: AppBar(
+            title: Text(room.name),
+            actions: [
+              IconButton(
+                icon: Icon(Icons.exit_to_app),
+                onPressed: provider.leaveRoom,
+              ),
+            ],
+          ),
+          body: Column(
+            children: [
+              // Video call area
+              if (provider.isInCall) ...[
+                Expanded(
+                  flex: 2,
+                  child: VideoCallWidget(
+                    localStream: provider.localStream,
+                    remoteStreams: provider.remoteStreams,
+                    isAudioEnabled: provider.isAudioEnabled,
+                    isVideoEnabled: provider.isVideoEnabled,
+                    onEndCall: provider.endCall,
+                    onToggleAudio: provider.toggleAudio,
+                    onToggleVideo: provider.toggleVideo,
+                    onSwitchCamera: provider.switchCamera,
+                  ),
+                ),
+              ] else ...[
+                Container(
+                  height: 200,
+                  child: Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text('Participants: ${provider.participants.length}'),
+                        SizedBox(height: 16),
+                        ElevatedButton(
+                          onPressed: provider.startCall,
+                          child: Text('Start Call'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+
+              // Chat area
+              Expanded(
+                flex: 3,
+                child: ChatWidget(
+                  messages: provider.messages,
+                  currentUser: provider.currentUser,
+                  roomId: room.roomId,
+                  onSendMessage: provider.sendMessage,
+                  onSendFile: provider.sendFile,
+                  onTypingChanged: provider.sendTypingIndicator,
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 }

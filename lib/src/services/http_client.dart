@@ -1,5 +1,3 @@
-// lib/src/services/http_client.dart
-
 import 'dart:convert';
 import 'dart:io';
 
@@ -26,7 +24,8 @@ class HttpClient {
   Map<String, String> get _headers => {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
-        'X-API-KEY': apiKey,
+        'X-API-Key': apiKey, // Ensure consistent header name
+        'User-Agent': 'TalkLynk-Flutter-SDK/1.0.0',
       };
 
   Future<Map<String, dynamic>> get(String endpoint) async {
@@ -99,6 +98,8 @@ class HttpClient {
   Future<Map<String, dynamic>> uploadFile(
     String endpoint,
     File file, {
+    String fieldName = 'file',
+    Map<String, String>? additionalFields,
     void Function(int sent, int total)? onProgress,
   }) async {
     final url = Uri.parse('$baseUrl$endpoint');
@@ -106,15 +107,24 @@ class HttpClient {
 
     try {
       final request = http.MultipartRequest('POST', url);
+
+      // Add API key header
       request.headers.addAll({
-        'X-API-KEY': apiKey,
+        'X-API-Key': apiKey,
+        'Accept': 'application/json',
       });
 
+      // Add file
       final multipartFile = await http.MultipartFile.fromPath(
-        'file',
+        fieldName,
         file.path,
       );
       request.files.add(multipartFile);
+
+      // Add additional fields
+      if (additionalFields != null) {
+        request.fields.addAll(additionalFields);
+      }
 
       final streamedResponse = await _client.send(request);
       final response = await http.Response.fromStream(streamedResponse);
@@ -131,20 +141,32 @@ class HttpClient {
 
     if (response.statusCode >= 200 && response.statusCode < 300) {
       try {
-        return jsonDecode(response.body) as Map<String, dynamic>;
+        final jsonResponse = jsonDecode(response.body) as Map<String, dynamic>;
+
+        // Handle both direct response and wrapped response
+        if (jsonResponse.containsKey('data')) {
+          return jsonResponse;
+        } else {
+          return {'data': jsonResponse, 'success': true};
+        }
       } catch (e) {
-        return {'success': true};
+        return {'success': true, 'data': {}};
       }
     } else {
       String errorMessage = 'Request failed';
+      Map<String, dynamic>? errorData;
+
       try {
-        final errorData = jsonDecode(response.body) as Map<String, dynamic>;
-        errorMessage =
-            errorData['message'] ?? errorData['error'] ?? errorMessage;
+        errorData = jsonDecode(response.body) as Map<String, dynamic>;
+        errorMessage = errorData['message'] ??
+            errorData['error'] ??
+            'HTTP ${response.statusCode}: ${response.reasonPhrase}';
       } catch (e) {
         errorMessage = 'HTTP ${response.statusCode}: ${response.reasonPhrase}';
       }
-      throw WebRTCException(errorMessage);
+
+      throw WebRTCException(errorMessage,
+          statusCode: response.statusCode, errorData: errorData);
     }
   }
 
@@ -155,8 +177,12 @@ class HttpClient {
 
 class WebRTCException implements Exception {
   final String message;
-  const WebRTCException(this.message);
+  final int? statusCode;
+  final Map<String, dynamic>? errorData;
+
+  const WebRTCException(this.message, {this.statusCode, this.errorData});
 
   @override
-  String toString() => 'WebRTCException: $message';
+  String toString() =>
+      'WebRTCException: $message${statusCode != null ? ' (HTTP $statusCode)' : ''}';
 }

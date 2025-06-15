@@ -1,9 +1,7 @@
-// lib/src/providers/webrtc_provider.dart
-
 import 'package:flutter/foundation.dart';
-import 'package:talklynk_sdk/talklynk_sdk.dart';
-import 'package:talklynk_sdk/src/models/chat_message.dart' as Message;
 import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:talklynk_sdk/src/models/chat_message.dart' as Message;
+import 'package:talklynk_sdk/talklynk_sdk.dart';
 
 class WebRTCProvider extends ChangeNotifier {
   final WebRTCClient _client;
@@ -11,6 +9,9 @@ class WebRTCProvider extends ChangeNotifier {
   // Connection state
   bool _isConnected = false;
   String? _connectionError;
+
+  // User state
+  User? _currentUser;
 
   // Room state
   Room? _currentRoom;
@@ -33,6 +34,7 @@ class WebRTCProvider extends ChangeNotifier {
   // Getters
   bool get isConnected => _isConnected;
   String? get connectionError => _connectionError;
+  User? get currentUser => _currentUser;
   Room? get currentRoom => _currentRoom;
   List<Participant> get participants => List.unmodifiable(_participants);
   MediaStream? get localStream => _localStream;
@@ -146,7 +148,9 @@ class WebRTCProvider extends ChangeNotifier {
 
   // User methods
   void setCurrentUser(User user) {
+    _currentUser = user;
     _client.setCurrentUser(user);
+    notifyListeners();
   }
 
   // Room methods
@@ -159,22 +163,42 @@ class WebRTCProvider extends ChangeNotifier {
   }
 
   Future<void> joinRoom(String roomId) async {
-    await _client.joinRoom(roomId);
+    if (_currentUser == null) {
+      throw WebRTCException('Current user must be set before joining a room');
+    }
+
+    await _client.joinRoom(roomId, userId: _currentUser!.id);
     // Load existing messages
     _loadMessages(roomId);
   }
 
   Future<void> leaveRoom() async {
-    if (_currentRoom != null) {
-      await _client.leaveRoom(_currentRoom!.roomId);
+    if (_currentRoom != null && _currentUser != null) {
+      await _client.leaveRoom(_currentRoom!.roomId, userId: _currentUser!.id);
     }
   }
 
   // Media methods
+  Future<void> getUserMedia([MediaConstraints? constraints]) async {
+    try {
+      final stream = await _client.getUserMedia(constraints);
+      _localStream = stream;
+      notifyListeners();
+    } catch (e) {
+      _connectionError = e.toString();
+      notifyListeners();
+    }
+  }
+
   Future<void> startCall() async {
-    if (_currentRoom == null) return;
+    if (_currentRoom == null || _currentUser == null) return;
 
     try {
+      // Ensure we have local media first
+      if (_localStream == null) {
+        await getUserMedia();
+      }
+
       final participantIds = _participants.map((p) => p.user.id).toList();
       await _client.startCall(_currentRoom!.roomId, participantIds);
     } catch (e) {
@@ -207,15 +231,23 @@ class WebRTCProvider extends ChangeNotifier {
 
   // Chat methods
   Future<void> sendMessage(String message) async {
-    if (_currentRoom == null) return;
+    if (_currentRoom == null || _currentUser == null) return;
 
     try {
-      final chatMessage = await _client.sendMessage(
-        _currentRoom!.roomId,
-        SendMessageOptions(message: message, type: Message.MessageType.text),
+      final sendOptions = SendMessageOptions(
+        userId: _currentUser!.id,
+        message: message,
+        type: Message.MessageType.text,
       );
-      _messages.add(chatMessage);
-      notifyListeners();
+
+      final chatMessage =
+          await _client.sendMessage(_currentRoom!.roomId, sendOptions);
+
+      // Only add if it's not already in the list (avoid duplicates from WebSocket)
+      if (!_messages.any((m) => m.id == chatMessage.id)) {
+        _messages.add(chatMessage);
+        notifyListeners();
+      }
     } catch (e) {
       _connectionError = e.toString();
       notifyListeners();
@@ -223,21 +255,38 @@ class WebRTCProvider extends ChangeNotifier {
   }
 
   Future<void> sendFile(String filePath) async {
-    if (_currentRoom == null) return;
+    if (_currentRoom == null || _currentUser == null) return;
 
     try {
-      final chatMessage = await _client.sendMessage(
-        _currentRoom!.roomId,
-        SendMessageOptions(
-          filePath: filePath,
-          type: Message.MessageType.file,
-        ),
+      final sendOptions = SendMessageOptions(
+        userId: _currentUser!.id,
+        filePath: filePath,
+        type: Message.MessageType.file,
       );
-      _messages.add(chatMessage);
-      notifyListeners();
+
+      final chatMessage =
+          await _client.sendMessage(_currentRoom!.roomId, sendOptions);
+
+      // Only add if it's not already in the list
+      if (!_messages.any((m) => m.id == chatMessage.id)) {
+        _messages.add(chatMessage);
+        notifyListeners();
+      }
     } catch (e) {
       _connectionError = e.toString();
       notifyListeners();
+    }
+  }
+
+  Future<void> sendTypingIndicator(bool isTyping) async {
+    if (_currentRoom == null || _currentUser == null) return;
+
+    try {
+      await _client.sendTypingIndicator(_currentRoom!.roomId, isTyping,
+          userId: _currentUser!.id);
+    } catch (e) {
+      // Don't show error for typing indicators
+      print('Failed to send typing indicator: $e');
     }
   }
 

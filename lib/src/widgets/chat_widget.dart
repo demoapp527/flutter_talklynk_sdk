@@ -1,24 +1,26 @@
-// lib/src/widgets/chat_widget.dart
-
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:talklynk_sdk/talklynk_sdk.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:talklynk_sdk/talklynk_sdk.dart';
 
 class ChatWidget extends StatefulWidget {
   final List<ChatMessage> messages;
   final Function(String) onSendMessage;
   final Function(String)? onSendFile;
+  final Function(bool)? onTypingChanged;
   final User? currentUser;
   final String? roomId;
+  final bool isLoading;
 
   const ChatWidget({
     Key? key,
     required this.messages,
     required this.onSendMessage,
     this.onSendFile,
+    this.onTypingChanged,
     this.currentUser,
     this.roomId,
+    this.isLoading = false,
   }) : super(key: key);
 
   @override
@@ -29,12 +31,28 @@ class _ChatWidgetState extends State<ChatWidget> {
   final TextEditingController _messageController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   final ImagePicker _imagePicker = ImagePicker();
+  bool _isTyping = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _messageController.addListener(_onTextChanged);
+  }
 
   @override
   void dispose() {
+    _messageController.removeListener(_onTextChanged);
     _messageController.dispose();
     _scrollController.dispose();
     super.dispose();
+  }
+
+  void _onTextChanged() {
+    final isCurrentlyTyping = _messageController.text.isNotEmpty;
+    if (isCurrentlyTyping != _isTyping) {
+      _isTyping = isCurrentlyTyping;
+      widget.onTypingChanged?.call(_isTyping);
+    }
   }
 
   @override
@@ -64,6 +82,11 @@ class _ChatWidgetState extends State<ChatWidget> {
     if (message.isNotEmpty) {
       widget.onSendMessage(message);
       _messageController.clear();
+      // Clear typing indicator
+      if (_isTyping) {
+        _isTyping = false;
+        widget.onTypingChanged?.call(false);
+      }
     }
   }
 
@@ -89,6 +112,7 @@ class _ChatWidgetState extends State<ChatWidget> {
       final FilePickerResult? result = await FilePicker.platform.pickFiles(
         type: FileType.any,
         allowMultiple: false,
+        withData: false, // Don't load file data into memory
       );
 
       if (result != null &&
@@ -105,12 +129,14 @@ class _ChatWidgetState extends State<ChatWidget> {
   }
 
   void _showError(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: Colors.red,
-      ),
-    );
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 
   @override
@@ -119,24 +145,26 @@ class _ChatWidgetState extends State<ChatWidget> {
       children: [
         // Messages list
         Expanded(
-          child: widget.messages.isEmpty
-              ? const Center(
-                  child: Text(
-                    'No messages yet. Start the conversation!',
-                    style: TextStyle(
-                      color: Colors.grey,
-                      fontSize: 16,
+          child: widget.isLoading
+              ? const Center(child: CircularProgressIndicator())
+              : widget.messages.isEmpty
+                  ? const Center(
+                      child: Text(
+                        'No messages yet. Start the conversation!',
+                        style: TextStyle(
+                          color: Colors.grey,
+                          fontSize: 16,
+                        ),
+                      ),
+                    )
+                  : ListView.builder(
+                      controller: _scrollController,
+                      padding: const EdgeInsets.all(16),
+                      itemCount: widget.messages.length,
+                      itemBuilder: (context, index) {
+                        return _buildMessageBubble(widget.messages[index]);
+                      },
                     ),
-                  ),
-                )
-              : ListView.builder(
-                  controller: _scrollController,
-                  padding: const EdgeInsets.all(16),
-                  itemCount: widget.messages.length,
-                  itemBuilder: (context, index) {
-                    return _buildMessageBubble(widget.messages[index]);
-                  },
-                ),
         ),
 
         // Message input
@@ -155,15 +183,7 @@ class _ChatWidgetState extends State<ChatWidget> {
             isOwnMessage ? MainAxisAlignment.end : MainAxisAlignment.start,
         children: [
           if (!isOwnMessage) ...[
-            CircleAvatar(
-              radius: 16,
-              backgroundColor: Colors.grey.shade300,
-              child: Text(
-                message.user.name[0].toUpperCase(),
-                style:
-                    const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-              ),
-            ),
+            _buildAvatar(message.user),
             const SizedBox(width: 8),
           ],
           Flexible(
@@ -204,21 +224,28 @@ class _ChatWidgetState extends State<ChatWidget> {
           ),
           if (isOwnMessage) ...[
             const SizedBox(width: 8),
-            CircleAvatar(
-              radius: 16,
-              backgroundColor: Colors.blue,
-              child: Text(
-                message.user.name[0].toUpperCase(),
-                style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.white,
-                ),
-              ),
-            ),
+            _buildAvatar(message.user, isOwn: true),
           ],
         ],
       ),
+    );
+  }
+
+  Widget _buildAvatar(User user, {bool isOwn = false}) {
+    return CircleAvatar(
+      radius: 16,
+      backgroundColor: isOwn ? Colors.blue : Colors.grey.shade300,
+      backgroundImage: user.avatar != null ? NetworkImage(user.avatar!) : null,
+      child: user.avatar == null
+          ? Text(
+              user.name[0].toUpperCase(),
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                color: isOwn ? Colors.white : Colors.black,
+              ),
+            )
+          : null,
     );
   }
 
@@ -243,11 +270,30 @@ class _ChatWidgetState extends State<ChatWidget> {
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(8),
                   child: Image.network(
-                    message.metadata!['file_path'],
+                    _getFileUrl(message.metadata!['file_path']),
                     fit: BoxFit.cover,
+                    loadingBuilder: (context, child, loadingProgress) {
+                      if (loadingProgress == null) return child;
+                      return Container(
+                        height: 100,
+                        child: Center(
+                          child: CircularProgressIndicator(
+                            value: loadingProgress.expectedTotalBytes != null
+                                ? loadingProgress.cumulativeBytesLoaded /
+                                    loadingProgress.expectedTotalBytes!
+                                : null,
+                          ),
+                        ),
+                      );
+                    },
                     errorBuilder: (context, error, stackTrace) => Container(
                       padding: const EdgeInsets.all(16),
-                      child: const Icon(Icons.broken_image, size: 48),
+                      child: Column(
+                        children: [
+                          const Icon(Icons.broken_image, size: 48),
+                          const Text('Failed to load image'),
+                        ],
+                      ),
                     ),
                   ),
                 ),
@@ -274,33 +320,51 @@ class _ChatWidgetState extends State<ChatWidget> {
         );
 
       case MessageType.file:
-        return Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: isOwnMessage
-                ? Colors.white.withOpacity(0.2)
-                : Colors.grey.shade100,
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.attach_file,
-                color: isOwnMessage ? Colors.white : Colors.grey.shade600,
-              ),
-              const SizedBox(width: 8),
-              Flexible(
-                child: Text(
-                  message.metadata?['file_name'] ?? 'File',
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: isOwnMessage ? Colors.white : Colors.black87,
-                    decoration: TextDecoration.underline,
+        return GestureDetector(
+          onTap: () => _downloadFile(message),
+          child: Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: isOwnMessage
+                  ? Colors.white.withOpacity(0.2)
+                  : Colors.grey.shade100,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  _getFileIcon(message.metadata?['file_type']),
+                  color: isOwnMessage ? Colors.white : Colors.grey.shade600,
+                ),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        message.metadata?['original_name'] ?? 'File',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: isOwnMessage ? Colors.white : Colors.black87,
+                          decoration: TextDecoration.underline,
+                        ),
+                      ),
+                      if (message.metadata?['file_size'] != null)
+                        Text(
+                          _formatFileSize(message.metadata!['file_size']),
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: isOwnMessage
+                                ? Colors.white70
+                                : Colors.grey.shade600,
+                          ),
+                        ),
+                    ],
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         );
 
@@ -312,6 +376,53 @@ class _ChatWidgetState extends State<ChatWidget> {
             color: isOwnMessage ? Colors.white : Colors.black87,
           ),
         );
+    }
+  }
+
+  String _getFileUrl(String filePath) {
+    // Construct the full URL for the file
+    if (filePath.startsWith('http')) {
+      return filePath;
+    }
+    // Assuming your Laravel app serves files from storage/public
+    return 'https://api.talklynk.com/storage/$filePath';
+  }
+
+  IconData _getFileIcon(String? mimeType) {
+    if (mimeType == null) return Icons.attach_file;
+
+    if (mimeType.startsWith('image/')) return Icons.image;
+    if (mimeType.startsWith('video/')) return Icons.video_file;
+    if (mimeType.startsWith('audio/')) return Icons.audio_file;
+    if (mimeType.contains('pdf')) return Icons.picture_as_pdf;
+    if (mimeType.contains('word') || mimeType.contains('document'))
+      return Icons.description;
+    if (mimeType.contains('excel') || mimeType.contains('spreadsheet'))
+      return Icons.table_chart;
+    if (mimeType.contains('zip') || mimeType.contains('rar'))
+      return Icons.archive;
+
+    return Icons.attach_file;
+  }
+
+  String _formatFileSize(dynamic size) {
+    if (size == null) return '';
+
+    final bytes = size is String ? int.tryParse(size) ?? 0 : size as int;
+
+    if (bytes < 1024) return '${bytes}B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)}KB';
+    if (bytes < 1024 * 1024 * 1024)
+      return '${(bytes / (1024 * 1024)).toStringAsFixed(1)}MB';
+    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)}GB';
+  }
+
+  void _downloadFile(ChatMessage message) {
+    // Implement file download logic
+    final filePath = message.metadata?['file_path'];
+    if (filePath != null) {
+      // You can implement file download here
+      _showError('File download not implemented yet');
     }
   }
 
@@ -328,7 +439,8 @@ class _ChatWidgetState extends State<ChatWidget> {
         children: [
           // Attachment button
           IconButton(
-            onPressed: _showAttachmentOptions,
+            onPressed:
+                widget.currentUser != null ? _showAttachmentOptions : null,
             icon: const Icon(Icons.attach_file),
             color: Colors.grey.shade600,
           ),
@@ -343,8 +455,11 @@ class _ChatWidgetState extends State<ChatWidget> {
               ),
               child: TextField(
                 controller: _messageController,
-                decoration: const InputDecoration(
-                  hintText: 'Type a message...',
+                enabled: widget.currentUser != null,
+                decoration: InputDecoration(
+                  hintText: widget.currentUser != null
+                      ? 'Type a message...'
+                      : 'Set current user to send messages',
                   border: InputBorder.none,
                 ),
                 maxLines: null,
@@ -358,11 +473,11 @@ class _ChatWidgetState extends State<ChatWidget> {
 
           // Send button
           GestureDetector(
-            onTap: _sendMessage,
+            onTap: widget.currentUser != null ? _sendMessage : null,
             child: Container(
               padding: const EdgeInsets.all(12),
-              decoration: const BoxDecoration(
-                color: Colors.blue,
+              decoration: BoxDecoration(
+                color: widget.currentUser != null ? Colors.blue : Colors.grey,
                 shape: BoxShape.circle,
               ),
               child: const Icon(
