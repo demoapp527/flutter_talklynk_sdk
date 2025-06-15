@@ -4,14 +4,17 @@ class TalklynkSdkConfig {
   final String apiKey;
   final String baseUrl;
   final String wsUrl;
+  final String pusherAppKey;
   final Environment environment;
   final bool enableLogs;
+
   final Map<String, String>? customHeaders;
 
   const TalklynkSdkConfig({
     required this.apiKey,
     this.baseUrl = 'https://api.talklynk.com/api/sdk',
     this.wsUrl = 'wss://ws.talklynk.com',
+    this.pusherAppKey = 'ed25e2b7fc96a889c7a8',
     this.environment = Environment.production,
     this.enableLogs = false,
     this.customHeaders,

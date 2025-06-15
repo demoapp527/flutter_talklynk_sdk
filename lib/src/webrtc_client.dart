@@ -29,10 +29,10 @@ class WebRTCClient {
     );
 
     _wsService = WebSocketService(
-      wsUrl: config.wsUrl,
-      apiKey: config.apiKey,
-      enableLogs: config.enableLogs,
-    );
+        wsUrl: config.wsUrl,
+        apiKey: config.apiKey,
+        enableLogs: config.enableLogs,
+        pusherAppKey: config.pusherAppKey);
 
     _webrtcService = WebRTCService(enableLogs: config.enableLogs);
 
