@@ -1,3 +1,5 @@
+// lib/src/models/participant.dart
+
 import 'package:json_annotation/json_annotation.dart';
 
 import 'user.dart';
@@ -17,47 +19,30 @@ class Participant {
   final DateTime? leftAt;
   final String status;
   @JsonKey(name: 'created_at')
-  final DateTime? createdAt;
+  final DateTime createdAt;
   @JsonKey(name: 'updated_at')
-  final DateTime? updatedAt;
-
+  final DateTime updatedAt;
   // User relationship
   final User? user;
 
-  Participant({
+  const Participant({
     required this.id,
     required this.roomId,
     required this.userId,
     required this.joinedAt,
     this.leftAt,
-    this.status = 'active',
-    this.createdAt,
-    this.updatedAt,
+    required this.status,
+    required this.createdAt,
+    required this.updatedAt,
     this.user,
   });
 
   factory Participant.fromJson(Map<String, dynamic> json) {
     try {
-      // Clean and prepare the JSON data
+      // Handle the response from Laravel API
       final participantData = Map<String, dynamic>.from(json);
 
-      // Ensure required integer fields are properly typed
-      if (participantData['id'] != null) {
-        participantData['id'] = _ensureInt(participantData['id']);
-      }
-      if (participantData['room_id'] != null) {
-        participantData['room_id'] = _ensureInt(participantData['room_id']);
-      }
-      if (participantData['user_id'] != null) {
-        participantData['user_id'] = _ensureInt(participantData['user_id']);
-      }
-
-      // Handle status field
-      if (!participantData.containsKey('status')) {
-        participantData['status'] = 'active';
-      }
-
-      // Handle dates
+      // Ensure dates are properly formatted
       for (String dateField in [
         'joined_at',
         'left_at',
@@ -70,16 +55,10 @@ class Participant {
         }
       }
 
-      // Handle user relationship
-      if (participantData['user'] != null &&
-          participantData['user'] is Map<String, dynamic>) {
-        try {
-          participantData['user'] =
-              User.fromJson(participantData['user'] as Map<String, dynamic>);
-        } catch (e) {
-          print('Error parsing participant user: $e');
-          participantData['user'] = null;
-        }
+      // Handle user relationship if present
+      if (participantData['user'] != null) {
+        participantData['user'] =
+            User.fromJson(participantData['user'] as Map<String, dynamic>);
       }
 
       return _$ParticipantFromJson(participantData);
@@ -92,23 +71,10 @@ class Participant {
 
   Map<String, dynamic> toJson() => _$ParticipantToJson(this);
 
-  // Helper method to ensure int conversion
-  static int _ensureInt(dynamic value) {
-    if (value == null) return 0;
-    if (value is int) return value;
-    if (value is double) return value.toInt();
-    if (value is String) return int.tryParse(value) ?? 0;
-    return 0;
-  }
-
-  // Getters for convenience
-  String get displayName => user?.displayName ?? 'User $userId';
   bool get isActive => status.toLowerCase() == 'active';
+  bool get hasLeft => leftAt != null;
 
-  @override
-  String toString() {
-    return 'Participant{id: $id, userId: $userId, status: $status, user: ${user?.name}}';
-  }
+  String get displayName => user?.displayName ?? 'User $userId';
 
   @override
   bool operator ==(Object other) =>
@@ -119,4 +85,9 @@ class Participant {
 
   @override
   int get hashCode => id.hashCode;
+
+  @override
+  String toString() {
+    return 'Participant{id: $id, userId: $userId, status: $status, user: ${user?.name}}';
+  }
 }

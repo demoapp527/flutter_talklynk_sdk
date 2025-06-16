@@ -288,32 +288,79 @@ class WebRTCClient {
       }
 
       // Add optional user data for auto-creation
-      if (userName != null) joinData['username'] = userName;
-      if (userEmail != null) joinData['email'] = userEmail;
+      if (userName != null) joinData['user_name'] = userName;
+      if (userEmail != null) joinData['user_email'] = userEmail;
+      if (username != null && !joinData.containsKey('user_name')) {
+        joinData['user_name'] = username;
+      }
 
       final response = await _httpClient.post('/rooms/$roomId/join', joinData);
 
-      // Handle the response
-      final roomData = response['room'] ?? response;
-      final participantData = response['participant'];
-      final userData = response['user'];
-      JsonDebugHelper.analyzeResponse('Join Room Response', response);
-      final room = Room.fromJson(roomData);
-      final participant = Participant.fromJson(participantData);
+      // Handle the Laravel response structure
+      Map<String, dynamic> roomData;
+      Map<String, dynamic>? participantData;
+      Map<String, dynamic>? userData;
 
-      // Update current user if returned
-      if (userData != null) {
-        _currentUser = User.fromJson(userData);
+      if (response.containsKey('data')) {
+        // Response wrapped in 'data' field
+        final data = response['data'] as Map<String, dynamic>;
+        roomData = data['room'] as Map<String, dynamic>;
+        participantData = data['participant'] as Map<String, dynamic>?;
+        userData = data['user'] as Map<String, dynamic>?;
+      } else {
+        // Direct response format
+        roomData = response['room'] as Map<String, dynamic>;
+        participantData = response['participant'] as Map<String, dynamic>?;
+        userData = response['user'] as Map<String, dynamic>?;
       }
 
-      // Get all participants
-      final participants = await getParticipants(roomId);
+      if (config.enableLogs) {
+        print('Parsing room data: $roomData');
+      }
 
+      final room = Room.fromJson(roomData);
+
+      // Update current user if returned from server
+      if (userData != null) {
+        _currentUser = User.fromJson(userData);
+        if (config.enableLogs) {
+          print(
+              'Updated current user: ${_currentUser?.name} (ID: ${_currentUser?.id})');
+        }
+      }
+
+      // Get all participants for the room
+      List<Participant> participants = [];
+      try {
+        participants = await getParticipants(roomId);
+      } catch (e) {
+        if (config.enableLogs) {
+          print('Warning: Could not fetch participants: $e');
+        }
+        // If we can't get all participants, at least include the current one
+        if (participantData != null) {
+          try {
+            final participant = Participant.fromJson(participantData);
+            participants = [participant];
+          } catch (e) {
+            if (config.enableLogs) {
+              print('Warning: Could not parse participant data: $e');
+            }
+          }
+        }
+      }
+
+      // Subscribe to room events
       _wsService.subscribeToRoom(roomId);
       _joinedRooms.add(roomId);
 
       final result = JoinRoomResult(room: room, participants: participants);
       _eventController.add(WebRTCClientEvent.roomJoined(result));
+
+      if (config.enableLogs) {
+        print('Successfully joined room: ${room.name} (${room.roomId})');
+        print('Participants: ${participants.length}');
+      }
 
       return result;
     } catch (e) {
@@ -322,6 +369,34 @@ class WebRTCClient {
       }
       throw WebRTCException('Failed to join room: $e');
     }
+  }
+
+// Also update the convenience methods
+  Future<JoinRoomResult> joinRoomWithUsername(
+    String roomId,
+    String username, {
+    String? email,
+  }) async {
+    return joinRoom(
+      roomId,
+      username: username,
+      userEmail: email,
+      userName: username,
+    );
+  }
+
+  Future<JoinRoomResult> joinRoomWithUserId(
+    String roomId,
+    String userId, {
+    String? name,
+    String? email,
+  }) async {
+    return joinRoom(
+      roomId,
+      userId: userId,
+      userName: name,
+      userEmail: email,
+    );
   }
 
   Future<void> leaveRoom(
@@ -352,34 +427,6 @@ class WebRTCClient {
     } catch (e) {
       throw WebRTCException('Failed to leave room: $e');
     }
-  }
-
-  // Quick join methods for convenience
-  Future<JoinRoomResult> joinRoomWithUsername(
-    String roomId,
-    String username, {
-    String? email,
-  }) async {
-    return joinRoom(
-      roomId,
-      username: username,
-      userEmail: email,
-      userName: username,
-    );
-  }
-
-  Future<JoinRoomResult> joinRoomWithUserId(
-    String roomId,
-    String userId, {
-    String? name,
-    String? email,
-  }) async {
-    return joinRoom(
-      roomId,
-      userId: userId,
-      userName: name,
-      userEmail: email,
-    );
   }
 
   // User Management

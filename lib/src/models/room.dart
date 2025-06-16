@@ -23,7 +23,7 @@ class Room {
   final DateTime? endedAt;
   @JsonKey(name: 'updated_at')
   final DateTime? updatedAt;
-  // Add optional settings field that might be in the response
+  // Add optional settings field that appears in your response
   final Map<String, dynamic>? settings;
 
   Room({
@@ -43,37 +43,19 @@ class Room {
 
   factory Room.fromJson(Map<String, dynamic> json) {
     try {
-      json = Map<String, dynamic>.from(json);
-      json.forEach((key, value) {
-        if (value == null &&
-            (key.contains('id') || key.contains('participants'))) {
-          json[key] = 0; // Default null IDs to 0
-        }
-      });
-
-      // Clean and prepare the JSON data
+      // Handle the response from Laravel API
       final roomData = Map<String, dynamic>.from(json);
-
-      // Ensure required integer fields are properly typed
-      if (roomData['id'] != null) {
-        roomData['id'] = _ensureInt(roomData['id']);
-      }
-      if (roomData['max_participants'] != null) {
-        roomData['max_participants'] = _ensureInt(roomData['max_participants']);
-      }
-      if (roomData['client_id'] != null) {
-        roomData['client_id'] = _ensureInt(roomData['client_id']);
-      }
 
       // Handle status field - if missing, default to 'active'
       if (!roomData.containsKey('status')) {
         roomData['status'] = 'active';
       }
 
-      // Handle RoomType parsing
+      // Handle RoomType parsing - ensure it's correctly mapped
       if (roomData['type'] != null) {
-        final typeStr = roomData['type'].toString().toLowerCase();
-        roomData['type'] = typeStr;
+        final typeString = roomData['type'].toString().toLowerCase();
+        // Keep the original value for JsonSerializable to handle
+        roomData['type'] = typeString;
       }
 
       // Handle dates - ensure they're proper ISO strings
@@ -84,8 +66,14 @@ class Room {
         'updated_at'
       ]) {
         if (roomData[dateField] != null && roomData[dateField] is! DateTime) {
+          // Ensure it's a string for JsonSerializable to parse
           roomData[dateField] = roomData[dateField].toString();
         }
+      }
+
+      // Handle settings field (can be null)
+      if (roomData['settings'] == null) {
+        roomData['settings'] = null;
       }
 
       return _$RoomFromJson(roomData);
@@ -97,15 +85,6 @@ class Room {
   }
 
   Map<String, dynamic> toJson() => _$RoomToJson(this);
-
-  // Helper method to ensure int conversion
-  static int _ensureInt(dynamic value) {
-    if (value == null) return 0;
-    if (value is int) return value;
-    if (value is double) return value.toInt();
-    if (value is String) return int.tryParse(value) ?? 0;
-    return 0;
-  }
 
   // Helper methods for status conversion
   static RoomStatus _statusFromJson(dynamic status) {

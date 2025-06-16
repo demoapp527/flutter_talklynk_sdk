@@ -14,13 +14,9 @@ Participant _$ParticipantFromJson(Map<String, dynamic> json) => Participant(
       leftAt: json['left_at'] == null
           ? null
           : DateTime.parse(json['left_at'] as String),
-      status: json['status'] as String? ?? 'active',
-      createdAt: json['created_at'] == null
-          ? null
-          : DateTime.parse(json['created_at'] as String),
-      updatedAt: json['updated_at'] == null
-          ? null
-          : DateTime.parse(json['updated_at'] as String),
+      status: json['status'] as String,
+      createdAt: DateTime.parse(json['created_at'] as String),
+      updatedAt: DateTime.parse(json['updated_at'] as String),
       user: json['user'] == null
           ? null
           : User.fromJson(json['user'] as Map<String, dynamic>),
@@ -34,7 +30,7 @@ Map<String, dynamic> _$ParticipantToJson(Participant instance) =>
       'joined_at': instance.joinedAt.toIso8601String(),
       'left_at': instance.leftAt?.toIso8601String(),
       'status': instance.status,
-      'created_at': instance.createdAt?.toIso8601String(),
-      'updated_at': instance.updatedAt?.toIso8601String(),
+      'created_at': instance.createdAt.toIso8601String(),
+      'updated_at': instance.updatedAt.toIso8601String(),
       'user': instance.user,
     };
