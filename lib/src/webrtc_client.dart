@@ -297,7 +297,7 @@ class WebRTCClient {
       final roomData = response['room'] ?? response;
       final participantData = response['participant'];
       final userData = response['user'];
-
+      JsonDebugHelper.analyzeResponse('Join Room Response', response);
       final room = Room.fromJson(roomData);
       final participant = Participant.fromJson(participantData);
 
@@ -909,4 +909,70 @@ class CallStartedEvent extends WebRTCClientEvent {
 class CallEndedEvent extends WebRTCClientEvent {
   final String roomId;
   const CallEndedEvent(this.roomId);
+}
+
+class JsonDebugHelper {
+  static void analyzeResponse(String context, dynamic response) {
+    print('\n=== JSON DEBUG: $context ===');
+    _printValue('Root', response, 0);
+    print('=== END DEBUG ===\n');
+  }
+
+  static void _printValue(String key, dynamic value, int depth) {
+    final indent = '  ' * depth;
+
+    if (value == null) {
+      print('$indent$key: null');
+    } else if (value is Map) {
+      print(
+          '$indent$key: Map<${value.keys.first.runtimeType}, ${value.values.first.runtimeType}> (${value.length} items)');
+      value.forEach((k, v) {
+        _printValue(k.toString(), v, depth + 1);
+      });
+    } else if (value is List) {
+      print(
+          '$indent$key: List<${value.isNotEmpty ? value.first.runtimeType : 'dynamic'}> (${value.length} items)');
+      for (int i = 0; i < value.length && i < 3; i++) {
+        _printValue('[$i]', value[i], depth + 1);
+      }
+      if (value.length > 3) {
+        print('$indent  ... ${value.length - 3} more items');
+      }
+    } else {
+      print('$indent$key: ${value.runtimeType} = $value');
+    }
+  }
+
+  static Map<String, dynamic> sanitizeForParsing(Map<String, dynamic> json) {
+    final sanitized = <String, dynamic>{};
+
+    json.forEach((key, value) {
+      if (value == null) {
+        sanitized[key] = null;
+      } else if (value is num) {
+        sanitized[key] = value;
+      } else if (value is String) {
+        // Try to convert string numbers to actual numbers if they should be numbers
+        if (key.contains('id') || key.contains('participants') || key == 'id') {
+          final numValue = num.tryParse(value);
+          sanitized[key] = numValue ?? value;
+        } else {
+          sanitized[key] = value;
+        }
+      } else if (value is Map<String, dynamic>) {
+        sanitized[key] = sanitizeForParsing(value);
+      } else if (value is List) {
+        sanitized[key] = value.map((item) {
+          if (item is Map<String, dynamic>) {
+            return sanitizeForParsing(item);
+          }
+          return item;
+        }).toList();
+      } else {
+        sanitized[key] = value;
+      }
+    });
+
+    return sanitized;
+  }
 }
