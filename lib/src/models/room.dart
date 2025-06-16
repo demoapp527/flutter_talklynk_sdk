@@ -43,6 +43,14 @@ class Room {
 
   factory Room.fromJson(Map<String, dynamic> json) {
     try {
+      json = Map<String, dynamic>.from(json);
+      json.forEach((key, value) {
+        if (value == null &&
+            (key.contains('id') || key.contains('participants'))) {
+          json[key] = 0; // Default null IDs to 0
+        }
+      });
+
       // Clean and prepare the JSON data
       final roomData = Map<String, dynamic>.from(json);
 
