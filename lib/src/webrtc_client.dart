@@ -288,11 +288,8 @@ class WebRTCClient {
       }
 
       // Add optional user data for auto-creation
-      if (userName != null) joinData['user_name'] = userName;
-      if (userEmail != null) joinData['user_email'] = userEmail;
-      if (username != null && !joinData.containsKey('user_name')) {
-        joinData['user_name'] = username;
-      }
+      if (userName != null) joinData['username'] = userName;
+      if (userEmail != null) joinData['email'] = userEmail;
 
       final response = await _httpClient.post('/rooms/$roomId/join', joinData);
 
