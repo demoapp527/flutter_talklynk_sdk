@@ -55,8 +55,23 @@ class WebSocketService {
         onDone: _handleDisconnection,
       );
 
-      // Wait a bit for the connection to establish
-      await Future.delayed(Duration(seconds: 2));
+      // Wait for connection established event with timeout
+      final connectionTimeout = Timer(Duration(seconds: 10), () {
+        if (!_isConnected && _isConnecting) {
+          _isConnecting = false;
+          _logger.e(
+              'Connection timeout - no connection_established event received');
+          throw Exception(
+              'Connection timeout - no connection_established event received');
+        }
+      });
+
+      // Wait for connection to be established
+      while (_isConnecting && !_isConnected) {
+        await Future.delayed(Duration(milliseconds: 100));
+      }
+
+      connectionTimeout.cancel();
 
       if (_isConnected) {
         _isConnecting = false;
@@ -64,8 +79,7 @@ class WebSocketService {
         _logger.d('WebSocket connected successfully');
         _emitEvent('connection:connected', {});
       } else {
-        throw Exception(
-            'Connection timeout - no connection_established event received');
+        throw Exception('Connection failed - unknown reason');
       }
     } catch (e) {
       _isConnecting = false;
@@ -77,15 +91,11 @@ class WebSocketService {
   }
 
   Uri _buildWebSocketUri() {
-    // Parse the WebSocket URL
     final uri = Uri.parse(wsUrl);
 
-    // Determine correct scheme and port
     String wsScheme = uri.scheme;
     int port = uri.hasPort ? uri.port : (wsScheme == 'wss' ? 443 : 80);
 
-    // Build the proper Pusher WebSocket URL
-    // Format: wss://host:port/app/{pusher_app_key}?protocol=7&client=flutter&version=1.0.0
     return Uri(
       scheme: wsScheme,
       host: uri.host,
@@ -170,7 +180,6 @@ class WebSocketService {
 
     _logger.d('Subscribing to room: $roomId');
 
-    // For presence channels, we need authentication
     _sendMessage({
       'event': 'pusher:subscribe',
       'data': {
@@ -210,8 +219,6 @@ class WebSocketService {
   }
 
   String _generateAuthToken(String channelName) {
-    // Generate auth token for presence channels
-    // This matches the format expected by your Laravel Broadcasting setup
     if (_socketId != null) {
       return '$_socketId:$apiKey';
     }
@@ -262,34 +269,45 @@ class WebSocketService {
         eventData = eventDataRaw;
       }
 
-      // Handle Pusher protocol events
-      switch (eventType) {
-        case 'pusher:connection_established':
-          _handleConnectionEstablished(eventData);
-          break;
-        case 'pusher:pong':
-          _logger.d('Received heartbeat pong');
-          break;
-        case 'pusher:error':
-          _handlePusherError(eventData);
-          break;
-        case 'pusher_internal:subscription_succeeded':
-          _handleSubscriptionSucceeded(channelName, eventData);
-          break;
-        case 'pusher_internal:subscription_error':
-          _handleSubscriptionError(channelName, eventData);
-          break;
-        case 'pusher_internal:member_added':
-          _handleMemberAdded(channelName, eventData);
-          break;
-        case 'pusher_internal:member_removed':
-          _handleMemberRemoved(channelName, eventData);
-          break;
-        default:
-          // Handle application events
-          if (eventType != null) {
-            _handleApplicationEvent(eventType, channelName, eventData);
-          }
+      // Handle Pusher protocol events - check for both colon and dot notation
+      if (eventType != null) {
+        // Normalize event names (replace dots with colons for consistent handling)
+        final normalizedEventType = eventType.replaceAll('.', ':');
+
+        switch (normalizedEventType) {
+          case 'pusher:connection_established':
+            _handleConnectionEstablished(eventData);
+            return; // Return early to avoid application event handling
+
+          case 'pusher:pong':
+            _logger.d('Received heartbeat pong');
+            return;
+
+          case 'pusher:error':
+            _handlePusherError(eventData);
+            return;
+
+          case 'pusher_internal:subscription_succeeded':
+            _handleSubscriptionSucceeded(channelName, eventData);
+            return;
+
+          case 'pusher_internal:subscription_error':
+            _handleSubscriptionError(channelName, eventData);
+            return;
+
+          case 'pusher_internal:member_added':
+            _handleMemberAdded(channelName, eventData);
+            return;
+
+          case 'pusher_internal:member_removed':
+            _handleMemberRemoved(channelName, eventData);
+            return;
+        }
+      }
+
+      // If we reach here, it's an application event
+      if (eventType != null && !eventType.startsWith('pusher')) {
+        _handleApplicationEvent(eventType, channelName, eventData);
       }
     } catch (e) {
       _logger.e('Failed to parse WebSocket message: $e');
@@ -302,7 +320,8 @@ class WebSocketService {
 
       _logger.d('Pusher connection established with socket_id: $_socketId');
 
-      _isConnected = true; // Mark as connected when we receive this event
+      _isConnected = true; // Mark as connected
+      _isConnecting = false; // Stop connecting flag
 
       // Start heartbeat after connection is established
       _startHeartbeat();
@@ -403,9 +422,7 @@ class WebSocketService {
         'event': mappedEventType,
         'channel': channelName,
         'data': eventData,
-        ...eventData is Map<String, dynamic>
-            ? eventData
-            : {}, // Flatten data for easier access
+        ...eventData is Map<String, dynamic> ? eventData : {},
       });
     } catch (e) {
       _logger.e('Error handling application event: $e');
@@ -416,6 +433,7 @@ class WebSocketService {
     _logger.e('WebSocket error: $error');
     _emitEvent('connection:error', {'error': error.toString()});
     _isConnected = false;
+    _isConnecting = false;
 
     // Don't auto-reconnect on certain errors
     if (error.toString().contains('426') ||
@@ -433,6 +451,7 @@ class WebSocketService {
   void _handleDisconnection() {
     _logger.d('WebSocket disconnected');
     _isConnected = false;
+    _isConnecting = false;
     _subscribedChannels.clear();
     _socketId = null;
     _emitEvent('connection:disconnected', {});
