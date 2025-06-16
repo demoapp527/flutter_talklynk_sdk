@@ -9,12 +9,15 @@ part of 'participant.dart';
 Participant _$ParticipantFromJson(Map<String, dynamic> json) => Participant(
       id: (json['id'] as num).toInt(),
       user: User.fromJson(json['user'] as Map<String, dynamic>),
-      roomId: json['room_id'] as String,
+      roomId: json['room_id'],
       joinedAt: DateTime.parse(json['joined_at'] as String),
       leftAt: json['left_at'] == null
           ? null
           : DateTime.parse(json['left_at'] as String),
-      status: $enumDecode(_$ParticipantStatusEnumMap, json['status']),
+      status: json['status'] == null
+          ? ParticipantStatus.active
+          : Participant._statusFromJson(json['status']),
+      role: json['role'] as String?,
     );
 
 Map<String, dynamic> _$ParticipantToJson(Participant instance) =>
@@ -24,11 +27,6 @@ Map<String, dynamic> _$ParticipantToJson(Participant instance) =>
       'room_id': instance.roomId,
       'joined_at': instance.joinedAt.toIso8601String(),
       'left_at': instance.leftAt?.toIso8601String(),
-      'status': _$ParticipantStatusEnumMap[instance.status]!,
+      'status': Participant._statusToJson(instance.status),
+      'role': instance.role,
     };
-
-const _$ParticipantStatusEnumMap = {
-  ParticipantStatus.active: 'active',
-  ParticipantStatus.left: 'left',
-  ParticipantStatus.kicked: 'kicked',
-};

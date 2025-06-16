@@ -11,8 +11,11 @@ Room _$RoomFromJson(Map<String, dynamic> json) => Room(
       roomId: json['room_id'] as String,
       name: json['name'] as String,
       type: $enumDecode(_$RoomTypeEnumMap, json['type']),
-      status: $enumDecode(_$RoomStatusEnumMap, json['status']),
+      status: json['status'] == null
+          ? RoomStatus.active
+          : Room._statusFromJson(json['status']),
       maxParticipants: (json['max_participants'] as num).toInt(),
+      clientId: (json['client_id'] as num?)?.toInt(),
       createdAt: DateTime.parse(json['created_at'] as String),
       startedAt: json['started_at'] == null
           ? null
@@ -20,6 +23,9 @@ Room _$RoomFromJson(Map<String, dynamic> json) => Room(
       endedAt: json['ended_at'] == null
           ? null
           : DateTime.parse(json['ended_at'] as String),
+      updatedAt: json['updated_at'] == null
+          ? null
+          : DateTime.parse(json['updated_at'] as String),
     );
 
 Map<String, dynamic> _$RoomToJson(Room instance) => <String, dynamic>{
@@ -27,20 +33,17 @@ Map<String, dynamic> _$RoomToJson(Room instance) => <String, dynamic>{
       'room_id': instance.roomId,
       'name': instance.name,
       'type': _$RoomTypeEnumMap[instance.type]!,
-      'status': _$RoomStatusEnumMap[instance.status]!,
+      'status': Room._statusToJson(instance.status),
       'max_participants': instance.maxParticipants,
+      'client_id': instance.clientId,
       'created_at': instance.createdAt.toIso8601String(),
       'started_at': instance.startedAt?.toIso8601String(),
       'ended_at': instance.endedAt?.toIso8601String(),
+      'updated_at': instance.updatedAt?.toIso8601String(),
     };
 
 const _$RoomTypeEnumMap = {
   RoomType.video: 'video',
   RoomType.audio: 'audio',
   RoomType.chat: 'chat',
-};
-
-const _$RoomStatusEnumMap = {
-  RoomStatus.active: 'active',
-  RoomStatus.ended: 'ended',
 };

@@ -8,12 +8,15 @@ part of 'chat_message.dart';
 
 ChatMessage _$ChatMessageFromJson(Map<String, dynamic> json) => ChatMessage(
       id: (json['id'] as num).toInt(),
-      roomId: json['room_id'] as String,
+      roomId: json['room_id'],
       user: User.fromJson(json['user'] as Map<String, dynamic>),
       message: json['message'] as String,
       type: $enumDecode(_$MessageTypeEnumMap, json['type']),
       metadata: json['metadata'] as Map<String, dynamic>?,
       createdAt: DateTime.parse(json['created_at'] as String),
+      updatedAt: json['updated_at'] == null
+          ? null
+          : DateTime.parse(json['updated_at'] as String),
     );
 
 Map<String, dynamic> _$ChatMessageToJson(ChatMessage instance) =>
@@ -25,6 +28,7 @@ Map<String, dynamic> _$ChatMessageToJson(ChatMessage instance) =>
       'type': _$MessageTypeEnumMap[instance.type]!,
       'metadata': instance.metadata,
       'created_at': instance.createdAt.toIso8601String(),
+      'updated_at': instance.updatedAt?.toIso8601String(),
     };
 
 const _$MessageTypeEnumMap = {

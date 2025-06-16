@@ -52,18 +52,34 @@ class WebRTCClient {
       final eventType = data['event'] as String?;
       final eventData = data['data'] as Map<String, dynamic>? ?? data;
 
+      if (config.enableLogs) {
+        print('WebSocket Event: $eventType, Data: $eventData');
+      }
+
       switch (eventType) {
         case 'user.joined':
-          final participant = Participant.fromJson(eventData);
-          _eventController.add(WebRTCClientEvent.userJoined(participant));
+          try {
+            final participant = Participant.fromJson(eventData);
+            _eventController.add(WebRTCClientEvent.userJoined(participant));
+          } catch (e) {
+            print('Error parsing user.joined event: $e');
+          }
           break;
         case 'user.left':
-          final participant = Participant.fromJson(eventData);
-          _eventController.add(WebRTCClientEvent.userLeft(participant));
+          try {
+            final participant = Participant.fromJson(eventData);
+            _eventController.add(WebRTCClientEvent.userLeft(participant));
+          } catch (e) {
+            print('Error parsing user.left event: $e');
+          }
           break;
         case 'chat.message':
-          final message = ChatMessage.fromJson(eventData);
-          _eventController.add(WebRTCClientEvent.messageReceived(message));
+          try {
+            final message = ChatMessage.fromJson(eventData);
+            _eventController.add(WebRTCClientEvent.messageReceived(message));
+          } catch (e) {
+            print('Error parsing chat.message event: $e');
+          }
           break;
         case 'webrtc.offer':
           _handleWebRTCOffer(eventData);
@@ -74,7 +90,31 @@ class WebRTCClient {
         case 'webrtc.ice-candidate':
           _handleWebRTCIceCandidate(eventData);
           break;
+        case 'call.started':
+          try {
+            final roomId = eventData['room_id'] as String?;
+            final participants =
+                eventData['participants'] as List<dynamic>? ?? [];
+            if (roomId != null) {
+              _eventController.add(WebRTCClientEvent.callStarted(
+                  roomId, participants.map((p) => p as int).toList()));
+            }
+          } catch (e) {
+            print('Error parsing call.started event: $e');
+          }
+          break;
+        case 'call.ended':
+          try {
+            final roomId = eventData['room_id'] as String?;
+            if (roomId != null) {
+              _eventController.add(WebRTCClientEvent.callEnded(roomId));
+            }
+          } catch (e) {
+            print('Error parsing call.ended event: $e');
+          }
+          break;
         case 'connection:connected':
+        case 'connection:established':
           _isConnected = true;
           _eventController.add(WebRTCClientEvent.connected());
           break;
@@ -84,8 +124,20 @@ class WebRTCClient {
           break;
         case 'connection:error':
           _eventController.add(WebRTCClientEvent.connectionError(
-              eventData['error'] ?? 'Unknown error'));
+              eventData['error']?.toString() ?? 'Unknown error'));
           break;
+        case 'room:subscription_succeeded':
+          if (config.enableLogs) {
+            print('Successfully subscribed to room: ${eventData['room_id']}');
+          }
+          break;
+        case 'subscription:error':
+          print('Subscription error: ${eventData['error']}');
+          break;
+        default:
+          if (config.enableLogs) {
+            print('Unhandled WebSocket event: $eventType');
+          }
       }
     });
 
@@ -107,11 +159,21 @@ class WebRTCClient {
           break;
         case IceCandidateGenerated:
           final e = event as IceCandidateGenerated;
-          //  _sendIceCandidate(e.userId, e.candidate);
+          // Get the current room to send the ICE candidate
+          final currentRoomId =
+              _joinedRooms.isNotEmpty ? _joinedRooms.first : null;
+          if (currentRoomId != null) {
+            _sendIceCandidate(e.userId, e.candidate, currentRoomId);
+          }
           break;
         case AnswerCreated:
           final e = event as AnswerCreated;
-          //_sendAnswer(e.userId, e.answer);
+          // Get the current room to send the answer
+          final currentRoomId =
+              _joinedRooms.isNotEmpty ? _joinedRooms.first : null;
+          if (currentRoomId != null) {
+            _sendAnswer(e.userId, e.answer, currentRoomId);
+          }
           break;
       }
     });
@@ -157,8 +219,25 @@ class WebRTCClient {
   Future<Room> createRoom(CreateRoomOptions options) async {
     try {
       final response = await _httpClient.post('/rooms', options.toJson());
-      return Room.fromJson(response);
+
+      // Handle both wrapped and direct responses
+      Map<String, dynamic> roomData;
+      if (response.containsKey('data')) {
+        roomData = response['data'] as Map<String, dynamic>;
+      } else {
+        // Direct response from Laravel
+        roomData = response;
+      }
+
+      if (config.enableLogs) {
+        print('Creating room from data: $roomData');
+      }
+
+      return Room.fromJson(roomData);
     } catch (e) {
+      if (config.enableLogs) {
+        print('Failed to create room: $e');
+      }
       throw WebRTCException('Failed to create room: $e');
     }
   }
@@ -167,7 +246,9 @@ class WebRTCClient {
     try {
       final response = await _httpClient.get('/rooms');
       final roomsData = response['data'] as List? ?? response as List;
-      return roomsData.map((json) => Room.fromJson(json)).toList();
+      return roomsData
+          .map((json) => Room.fromJson(json as Map<String, dynamic>))
+          .toList();
     } catch (e) {
       throw WebRTCException('Failed to get rooms: $e');
     }
@@ -176,7 +257,8 @@ class WebRTCClient {
   Future<Room> getRoom(String roomId) async {
     try {
       final response = await _httpClient.get('/rooms/$roomId');
-      return Room.fromJson(response);
+      final roomData = response['data'] ?? response;
+      return Room.fromJson(roomData);
     } catch (e) {
       throw WebRTCException('Failed to get room: $e');
     }
@@ -187,7 +269,7 @@ class WebRTCClient {
       final response = await _httpClient.get('/rooms/$roomId/participants');
       final participantsData = response['data'] as List? ?? response as List;
       return participantsData
-          .map((json) => Participant.fromJson(json))
+          .map((json) => Participant.fromJson(json as Map<String, dynamic>))
           .toList();
     } catch (e) {
       throw WebRTCException('Failed to get participants: $e');
@@ -233,6 +315,13 @@ class WebRTCClient {
         await getUserMedia();
       }
 
+      // Send start call request to server
+      final response =
+          await _httpClient.post('/rooms/$roomId/webrtc/call/start', {
+        'user_id': _currentUser?.id,
+        'participants': participantIds,
+      });
+
       // Create offers for each participant
       for (final participantId in participantIds) {
         if (participantId != _currentUser?.id) {
@@ -248,9 +337,24 @@ class WebRTCClient {
     }
   }
 
-  void endCall(String roomId) {
-    _webrtcService.cleanup();
-    _eventController.add(WebRTCClientEvent.callEnded(roomId));
+  Future<void> endCall(String roomId) async {
+    try {
+      // Send end call request to server
+      await _httpClient.post('/rooms/$roomId/webrtc/call/end', {
+        'user_id': _currentUser?.id,
+        'reason': 'manual',
+      });
+
+      _webrtcService.cleanup();
+      _eventController.add(WebRTCClientEvent.callEnded(roomId));
+    } catch (e) {
+      // Still cleanup locally even if server request fails
+      _webrtcService.cleanup();
+      _eventController.add(WebRTCClientEvent.callEnded(roomId));
+      if (config.enableLogs) {
+        print('Failed to send end call to server: $e');
+      }
+    }
   }
 
   Future<JoinRoomResult> joinRoom(String roomId, {int? userId}) async {
@@ -267,14 +371,23 @@ class WebRTCClient {
       final response =
           await _httpClient.post('/rooms/$roomId/join', joinOptions.toJson());
 
-      // Handle both response formats
-      final roomData = response['room'] ?? response['data']['room'] ?? response;
-      final participantsData =
-          response['participants'] ?? response['data']['participants'] ?? [];
+      // Handle the response format from Laravel
+      Map<String, dynamic> roomData;
+      List<dynamic> participantsData = [];
+
+      if (response.containsKey('data')) {
+        final data = response['data'] as Map<String, dynamic>;
+        roomData = data['room'] ?? data;
+        participantsData = data['participants'] ?? [];
+      } else {
+        // Handle direct response
+        roomData = response['room'] ?? response;
+        participantsData = response['participants'] ?? [];
+      }
 
       final room = Room.fromJson(roomData);
       final participants = (participantsData as List)
-          .map((json) => Participant.fromJson(json))
+          .map((json) => Participant.fromJson(json as Map<String, dynamic>))
           .toList();
 
       _wsService.subscribeToRoom(roomId);
@@ -285,6 +398,9 @@ class WebRTCClient {
 
       return result;
     } catch (e) {
+      if (config.enableLogs) {
+        print('Failed to join room: $e');
+      }
       throw WebRTCException('Failed to join room: $e');
     }
   }
@@ -351,6 +467,20 @@ class WebRTCClient {
     }
   }
 
+  Future<List<ChatMessage>> getMessages(String roomId,
+      {int page = 1, int perPage = 50}) async {
+    try {
+      final response = await _httpClient
+          .get('/rooms/$roomId/messages?page=$page&per_page=$perPage');
+      final messagesData = response['data'] as List? ?? response as List;
+      return messagesData
+          .map((json) => ChatMessage.fromJson(json as Map<String, dynamic>))
+          .toList();
+    } catch (e) {
+      throw WebRTCException('Failed to get messages: $e');
+    }
+  }
+
   Future<void> sendTypingIndicator(String roomId, bool typing,
       {int? userId}) async {
     try {
@@ -365,11 +495,13 @@ class WebRTCClient {
       });
     } catch (e) {
       // Don't throw for typing indicators, just log
-      print('Failed to send typing indicator: $e');
+      if (config.enableLogs) {
+        print('Failed to send typing indicator: $e');
+      }
     }
   }
 
-// WebRTC Signaling
+  // WebRTC Signaling
   Future<void> _sendOffer(
       int toUserId, RTCSessionDescription offer, String roomId) async {
     final data = {
@@ -384,7 +516,9 @@ class WebRTCClient {
     try {
       await _httpClient.post('/rooms/$roomId/webrtc/offer', data);
     } catch (e) {
-      print('Failed to send offer: $e');
+      if (config.enableLogs) {
+        print('Failed to send offer: $e');
+      }
     }
   }
 
@@ -402,7 +536,9 @@ class WebRTCClient {
     try {
       await _httpClient.post('/rooms/$roomId/webrtc/answer', data);
     } catch (e) {
-      print('Failed to send answer: $e');
+      if (config.enableLogs) {
+        print('Failed to send answer: $e');
+      }
     }
   }
 
@@ -421,65 +557,73 @@ class WebRTCClient {
     try {
       await _httpClient.post('/rooms/$roomId/webrtc/ice-candidate', data);
     } catch (e) {
-      print('Failed to send ICE candidate: $e');
-    }
-  }
-
-  Future<List<ChatMessage>> getMessages(String roomId,
-      {int page = 1, int perPage = 50}) async {
-    try {
-      final response = await _httpClient
-          .get('/rooms/$roomId/messages?page=$page&per_page=$perPage');
-      final messagesData = response['data'] as List? ?? response as List;
-      return messagesData.map((json) => ChatMessage.fromJson(json)).toList();
-    } catch (e) {
-      throw WebRTCException('Failed to get messages: $e');
+      if (config.enableLogs) {
+        print('Failed to send ICE candidate: $e');
+      }
     }
   }
 
   void _handleWebRTCOffer(Map<String, dynamic> data) async {
-    final fromUserId = data['from_user_id'] as int;
-    final toUserId = data['to_user_id'] as int;
-    final offerData = data['offer'] as Map<String, dynamic>;
+    try {
+      final fromUserId = data['from_user_id'] as int;
+      final toUserId = data['to_user_id'] as int;
+      final offerData = data['offer'] as Map<String, dynamic>;
 
-    if (toUserId == _currentUser?.id) {
-      final offer = RTCSessionDescription(
-        offerData['sdp'],
-        offerData['type'],
-      );
+      if (toUserId == _currentUser?.id) {
+        final offer = RTCSessionDescription(
+          offerData['sdp'],
+          offerData['type'],
+        );
 
-      await _webrtcService.handleOffer(fromUserId, offer);
+        await _webrtcService.handleOffer(fromUserId, offer);
+      }
+    } catch (e) {
+      if (config.enableLogs) {
+        print('Error handling WebRTC offer: $e');
+      }
     }
   }
 
   void _handleWebRTCAnswer(Map<String, dynamic> data) async {
-    final fromUserId = data['from_user_id'] as int;
-    final toUserId = data['to_user_id'] as int;
-    final answerData = data['answer'] as Map<String, dynamic>;
+    try {
+      final fromUserId = data['from_user_id'] as int;
+      final toUserId = data['to_user_id'] as int;
+      final answerData = data['answer'] as Map<String, dynamic>;
 
-    if (toUserId == _currentUser?.id) {
-      final answer = RTCSessionDescription(
-        answerData['sdp'],
-        answerData['type'],
-      );
+      if (toUserId == _currentUser?.id) {
+        final answer = RTCSessionDescription(
+          answerData['sdp'],
+          answerData['type'],
+        );
 
-      await _webrtcService.handleAnswer(fromUserId, answer);
+        await _webrtcService.handleAnswer(fromUserId, answer);
+      }
+    } catch (e) {
+      if (config.enableLogs) {
+        print('Error handling WebRTC answer: $e');
+      }
     }
   }
 
   void _handleWebRTCIceCandidate(Map<String, dynamic> data) async {
-    final fromUserId = data['from_user_id'] as int;
-    final toUserId = data['to_user_id'] as int;
-    final candidateData = data['candidate'] as Map<String, dynamic>;
+    try {
+      final fromUserId = data['from_user_id'] as int;
+      final toUserId = data['to_user_id'] as int;
+      final candidateData = data['candidate'] as Map<String, dynamic>;
 
-    if (toUserId == _currentUser?.id) {
-      final candidate = RTCIceCandidate(
-        candidateData['candidate'],
-        candidateData['sdpMid'],
-        candidateData['sdpMLineIndex'],
-      );
+      if (toUserId == _currentUser?.id) {
+        final candidate = RTCIceCandidate(
+          candidateData['candidate'],
+          candidateData['sdpMid'],
+          candidateData['sdpMLineIndex'],
+        );
 
-      await _webrtcService.handleIceCandidate(fromUserId, candidate);
+        await _webrtcService.handleIceCandidate(fromUserId, candidate);
+      }
+    } catch (e) {
+      if (config.enableLogs) {
+        print('Error handling WebRTC ICE candidate: $e');
+      }
     }
   }
 
