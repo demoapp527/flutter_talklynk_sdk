@@ -7,31 +7,82 @@ part 'participant.g.dart';
 @JsonSerializable()
 class Participant {
   final int id;
-  final User user;
   @JsonKey(name: 'room_id')
-  final dynamic roomId; // Can be String or int
+  final int roomId;
+  @JsonKey(name: 'user_id')
+  final int userId;
   @JsonKey(name: 'joined_at')
   final DateTime joinedAt;
   @JsonKey(name: 'left_at')
   final DateTime? leftAt;
-  @JsonKey(name: 'status', fromJson: _statusFromJson, toJson: _statusToJson)
-  final ParticipantStatus status;
-  @JsonKey(name: 'role')
-  final String? role;
+  final String status;
+  @JsonKey(name: 'created_at')
+  final DateTime? createdAt;
+  @JsonKey(name: 'updated_at')
+  final DateTime? updatedAt;
+
+  // User relationship
+  final User? user;
 
   Participant({
     required this.id,
-    required this.user,
     required this.roomId,
+    required this.userId,
     required this.joinedAt,
     this.leftAt,
-    this.status = ParticipantStatus.active,
-    this.role,
+    this.status = 'active',
+    this.createdAt,
+    this.updatedAt,
+    this.user,
   });
 
   factory Participant.fromJson(Map<String, dynamic> json) {
     try {
-      return _$ParticipantFromJson(json);
+      // Clean and prepare the JSON data
+      final participantData = Map<String, dynamic>.from(json);
+
+      // Ensure required integer fields are properly typed
+      if (participantData['id'] != null) {
+        participantData['id'] = _ensureInt(participantData['id']);
+      }
+      if (participantData['room_id'] != null) {
+        participantData['room_id'] = _ensureInt(participantData['room_id']);
+      }
+      if (participantData['user_id'] != null) {
+        participantData['user_id'] = _ensureInt(participantData['user_id']);
+      }
+
+      // Handle status field
+      if (!participantData.containsKey('status')) {
+        participantData['status'] = 'active';
+      }
+
+      // Handle dates
+      for (String dateField in [
+        'joined_at',
+        'left_at',
+        'created_at',
+        'updated_at'
+      ]) {
+        if (participantData[dateField] != null &&
+            participantData[dateField] is! DateTime) {
+          participantData[dateField] = participantData[dateField].toString();
+        }
+      }
+
+      // Handle user relationship
+      if (participantData['user'] != null &&
+          participantData['user'] is Map<String, dynamic>) {
+        try {
+          participantData['user'] =
+              User.fromJson(participantData['user'] as Map<String, dynamic>);
+        } catch (e) {
+          print('Error parsing participant user: $e');
+          participantData['user'] = null;
+        }
+      }
+
+      return _$ParticipantFromJson(participantData);
     } catch (e) {
       print('Error parsing Participant JSON: $e');
       print('JSON data: $json');
@@ -41,37 +92,31 @@ class Participant {
 
   Map<String, dynamic> toJson() => _$ParticipantToJson(this);
 
-  // Helper getter for room ID as string
-  String get roomIdString => roomId.toString();
-
-  // Helper methods for status conversion
-  static ParticipantStatus _statusFromJson(dynamic status) {
-    if (status == null) return ParticipantStatus.active;
-
-    switch (status.toString().toLowerCase()) {
-      case 'active':
-        return ParticipantStatus.active;
-      case 'left':
-        return ParticipantStatus.left;
-      case 'kicked':
-        return ParticipantStatus.kicked;
-      case 'banned':
-        return ParticipantStatus.banned;
-      default:
-        return ParticipantStatus.active;
-    }
+  // Helper method to ensure int conversion
+  static int _ensureInt(dynamic value) {
+    if (value == null) return 0;
+    if (value is int) return value;
+    if (value is double) return value.toInt();
+    if (value is String) return int.tryParse(value) ?? 0;
+    return 0;
   }
 
-  static String _statusToJson(ParticipantStatus status) => status.name;
-}
+  // Getters for convenience
+  String get displayName => user?.displayName ?? 'User $userId';
+  bool get isActive => status.toLowerCase() == 'active';
 
-enum ParticipantStatus {
-  @JsonValue('active')
-  active,
-  @JsonValue('left')
-  left,
-  @JsonValue('kicked')
-  kicked,
-  @JsonValue('banned')
-  banned,
+  @override
+  String toString() {
+    return 'Participant{id: $id, userId: $userId, status: $status, user: ${user?.name}}';
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is Participant &&
+          runtimeType == other.runtimeType &&
+          id == other.id;
+
+  @override
+  int get hashCode => id.hashCode;
 }

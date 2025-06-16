@@ -23,6 +23,8 @@ class Room {
   final DateTime? endedAt;
   @JsonKey(name: 'updated_at')
   final DateTime? updatedAt;
+  // Add optional settings field that might be in the response
+  final Map<String, dynamic>? settings;
 
   Room({
     required this.id,
@@ -36,20 +38,37 @@ class Room {
     this.startedAt,
     this.endedAt,
     this.updatedAt,
+    this.settings,
   });
 
   factory Room.fromJson(Map<String, dynamic> json) {
-    // Handle the response from Laravel API
     try {
-      // Ensure all required fields are present with proper types
+      // Clean and prepare the JSON data
       final roomData = Map<String, dynamic>.from(json);
+
+      // Ensure required integer fields are properly typed
+      if (roomData['id'] != null) {
+        roomData['id'] = _ensureInt(roomData['id']);
+      }
+      if (roomData['max_participants'] != null) {
+        roomData['max_participants'] = _ensureInt(roomData['max_participants']);
+      }
+      if (roomData['client_id'] != null) {
+        roomData['client_id'] = _ensureInt(roomData['client_id']);
+      }
 
       // Handle status field - if missing, default to 'active'
       if (!roomData.containsKey('status')) {
         roomData['status'] = 'active';
       }
 
-      // Handle dates - ensure they're proper ISO strings or DateTime objects
+      // Handle RoomType parsing
+      if (roomData['type'] != null) {
+        final typeStr = roomData['type'].toString().toLowerCase();
+        roomData['type'] = typeStr;
+      }
+
+      // Handle dates - ensure they're proper ISO strings
       for (String dateField in [
         'created_at',
         'started_at',
@@ -57,7 +76,6 @@ class Room {
         'updated_at'
       ]) {
         if (roomData[dateField] != null && roomData[dateField] is! DateTime) {
-          // Keep as string for JsonSerializable to parse
           roomData[dateField] = roomData[dateField].toString();
         }
       }
@@ -71,6 +89,15 @@ class Room {
   }
 
   Map<String, dynamic> toJson() => _$RoomToJson(this);
+
+  // Helper method to ensure int conversion
+  static int _ensureInt(dynamic value) {
+    if (value == null) return 0;
+    if (value is int) return value;
+    if (value is double) return value.toInt();
+    if (value is String) return int.tryParse(value) ?? 0;
+    return 0;
+  }
 
   // Helper methods for status conversion
   static RoomStatus _statusFromJson(dynamic status) {
@@ -89,6 +116,11 @@ class Room {
   }
 
   static String _statusToJson(RoomStatus status) => status.name;
+
+  @override
+  String toString() {
+    return 'Room{id: $id, roomId: $roomId, name: $name, type: $type, status: $status}';
+  }
 }
 
 enum RoomType {

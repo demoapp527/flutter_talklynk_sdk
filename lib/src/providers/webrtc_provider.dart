@@ -290,7 +290,7 @@ class WebRTCProvider extends ChangeNotifier {
         await getUserMedia();
       }
 
-      final participantIds = _participants.map((p) => p.user.id).toList();
+      final participantIds = _participants.map((p) => p.user!.id).toList();
       await _client.startCall(_currentRoom!.roomId, participantIds);
     } catch (e) {
       _connectionError = e.toString();

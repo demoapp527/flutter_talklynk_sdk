@@ -26,6 +26,7 @@ Room _$RoomFromJson(Map<String, dynamic> json) => Room(
       updatedAt: json['updated_at'] == null
           ? null
           : DateTime.parse(json['updated_at'] as String),
+      settings: json['settings'] as Map<String, dynamic>?,
     );
 
 Map<String, dynamic> _$RoomToJson(Room instance) => <String, dynamic>{
@@ -40,6 +41,7 @@ Map<String, dynamic> _$RoomToJson(Room instance) => <String, dynamic>{
       'started_at': instance.startedAt?.toIso8601String(),
       'ended_at': instance.endedAt?.toIso8601String(),
       'updated_at': instance.updatedAt?.toIso8601String(),
+      'settings': instance.settings,
     };
 
 const _$RoomTypeEnumMap = {
