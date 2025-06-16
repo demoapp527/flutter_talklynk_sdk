@@ -210,6 +210,181 @@ class WebRTCClient {
     return cameraStatus.isGranted && microphoneStatus.isGranted;
   }
 
+  Future<User> createUser({
+    required String name,
+    String? email,
+    String? externalId,
+    String? avatarUrl,
+    Map<String, dynamic>? metadata,
+  }) async {
+    try {
+      final userData = {
+        'name': name,
+        if (email != null) 'email': email,
+        if (externalId != null) 'external_id': externalId,
+        if (avatarUrl != null) 'avatar_url': avatarUrl,
+        if (metadata != null) 'metadata': metadata,
+      };
+
+      final response = await _httpClient.post('/users', userData);
+      final userJson = response['data'] ?? response;
+
+      final user = User.fromJson(userJson);
+      _currentUser = user; // Set as current user
+
+      return user;
+    } catch (e) {
+      throw WebRTCException('Failed to create user: $e');
+    }
+  }
+
+  Future<User?> getUser(String identifier) async {
+    try {
+      final response = await _httpClient.get('/users/$identifier');
+      final userJson = response['data'] ?? response;
+      return User.fromJson(userJson);
+    } catch (e) {
+      if (config.enableLogs) {
+        print('Failed to get user: $e');
+      }
+      return null;
+    }
+  }
+
+  Future<List<User>> getUsers({int page = 1, int perPage = 20}) async {
+    try {
+      final response =
+          await _httpClient.get('/users?page=$page&per_page=$perPage');
+      final usersData = response['data'] as List? ?? response as List;
+      return usersData
+          .map((json) => User.fromJson(json as Map<String, dynamic>))
+          .toList();
+    } catch (e) {
+      throw WebRTCException('Failed to get users: $e');
+    }
+  }
+
+  // Updated Room Management with better user handling
+  Future<JoinRoomResult> joinRoom(
+    String roomId, {
+    String? userId,
+    String? username,
+    String? userEmail,
+    String? userName,
+  }) async {
+    try {
+      // Prepare join options
+      final joinData = <String, dynamic>{};
+
+      if (userId != null) {
+        joinData['user_id'] = userId;
+      } else if (username != null) {
+        joinData['username'] = username;
+      } else if (_currentUser?.id != null) {
+        joinData['user_id'] = _currentUser!.id.toString();
+      } else {
+        throw WebRTCException(
+            'Must provide userId, username, or set current user');
+      }
+
+      // Add optional user data for auto-creation
+      if (userName != null) joinData['user_name'] = userName;
+      if (userEmail != null) joinData['user_email'] = userEmail;
+      if (username != null && !joinData.containsKey('user_name')) {
+        joinData['user_name'] = username;
+      }
+
+      final response = await _httpClient.post('/rooms/$roomId/join', joinData);
+
+      // Handle the response
+      final roomData = response['room'] ?? response;
+      final participantData = response['participant'];
+      final userData = response['user'];
+
+      final room = Room.fromJson(roomData);
+      final participant = Participant.fromJson(participantData);
+
+      // Update current user if returned
+      if (userData != null) {
+        _currentUser = User.fromJson(userData);
+      }
+
+      // Get all participants
+      final participants = await getParticipants(roomId);
+
+      _wsService.subscribeToRoom(roomId);
+      _joinedRooms.add(roomId);
+
+      final result = JoinRoomResult(room: room, participants: participants);
+      _eventController.add(WebRTCClientEvent.roomJoined(result));
+
+      return result;
+    } catch (e) {
+      if (config.enableLogs) {
+        print('Failed to join room: $e');
+      }
+      throw WebRTCException('Failed to join room: $e');
+    }
+  }
+
+  Future<void> leaveRoom(
+    String roomId, {
+    String? userId,
+    String? username,
+  }) async {
+    try {
+      final leaveData = <String, dynamic>{};
+
+      if (userId != null) {
+        leaveData['user_id'] = userId;
+      } else if (username != null) {
+        leaveData['username'] = username;
+      } else if (_currentUser?.id != null) {
+        leaveData['user_id'] = _currentUser!.id.toString();
+      } else {
+        throw WebRTCException(
+            'Must provide userId, username, or set current user');
+      }
+
+      await _httpClient.post('/rooms/$roomId/leave', leaveData);
+
+      _wsService.unsubscribeFromRoom(roomId);
+      _joinedRooms.remove(roomId);
+
+      _eventController.add(WebRTCClientEvent.roomLeft(roomId));
+    } catch (e) {
+      throw WebRTCException('Failed to leave room: $e');
+    }
+  }
+
+  // Quick join methods for convenience
+  Future<JoinRoomResult> joinRoomWithUsername(
+    String roomId,
+    String username, {
+    String? email,
+  }) async {
+    return joinRoom(
+      roomId,
+      username: username,
+      userEmail: email,
+      userName: username,
+    );
+  }
+
+  Future<JoinRoomResult> joinRoomWithUserId(
+    String roomId,
+    String userId, {
+    String? name,
+    String? email,
+  }) async {
+    return joinRoom(
+      roomId,
+      userId: userId,
+      userName: name,
+      userEmail: email,
+    );
+  }
+
   // User Management
   void setCurrentUser(User user) {
     _currentUser = user;
@@ -357,75 +532,75 @@ class WebRTCClient {
     }
   }
 
-  Future<JoinRoomResult> joinRoom(String roomId, {int? userId}) async {
-    try {
-      if (userId == null && _currentUser?.id == null) {
-        throw WebRTCException(
-            'User ID must be provided or current user must be set');
-      }
+  // Future<JoinRoomResult> joinRoom(String roomId, {int? userId}) async {
+  //   try {
+  //     if (userId == null && _currentUser?.id == null) {
+  //       throw WebRTCException(
+  //           'User ID must be provided or current user must be set');
+  //     }
 
-      final joinOptions = JoinRoomOptions(
-        userId: userId ?? _currentUser!.id,
-      );
+  //     final joinOptions = JoinRoomOptions(
+  //       userId: userId ?? _currentUser!.id,
+  //     );
 
-      final response =
-          await _httpClient.post('/rooms/$roomId/join', joinOptions.toJson());
+  //     final response =
+  //         await _httpClient.post('/rooms/$roomId/join', joinOptions.toJson());
 
-      // Handle the response format from Laravel
-      Map<String, dynamic> roomData;
-      List<dynamic> participantsData = [];
+  //     // Handle the response format from Laravel
+  //     Map<String, dynamic> roomData;
+  //     List<dynamic> participantsData = [];
 
-      if (response.containsKey('data')) {
-        final data = response['data'] as Map<String, dynamic>;
-        roomData = data['room'] ?? data;
-        participantsData = data['participants'] ?? [];
-      } else {
-        // Handle direct response
-        roomData = response['room'] ?? response;
-        participantsData = response['participants'] ?? [];
-      }
+  //     if (response.containsKey('data')) {
+  //       final data = response['data'] as Map<String, dynamic>;
+  //       roomData = data['room'] ?? data;
+  //       participantsData = data['participants'] ?? [];
+  //     } else {
+  //       // Handle direct response
+  //       roomData = response['room'] ?? response;
+  //       participantsData = response['participants'] ?? [];
+  //     }
 
-      final room = Room.fromJson(roomData);
-      final participants = (participantsData as List)
-          .map((json) => Participant.fromJson(json as Map<String, dynamic>))
-          .toList();
+  //     final room = Room.fromJson(roomData);
+  //     final participants = (participantsData as List)
+  //         .map((json) => Participant.fromJson(json as Map<String, dynamic>))
+  //         .toList();
 
-      _wsService.subscribeToRoom(roomId);
-      _joinedRooms.add(roomId);
+  //     _wsService.subscribeToRoom(roomId);
+  //     _joinedRooms.add(roomId);
 
-      final result = JoinRoomResult(room: room, participants: participants);
-      _eventController.add(WebRTCClientEvent.roomJoined(result));
+  //     final result = JoinRoomResult(room: room, participants: participants);
+  //     _eventController.add(WebRTCClientEvent.roomJoined(result));
 
-      return result;
-    } catch (e) {
-      if (config.enableLogs) {
-        print('Failed to join room: $e');
-      }
-      throw WebRTCException('Failed to join room: $e');
-    }
-  }
+  //     return result;
+  //   } catch (e) {
+  //     if (config.enableLogs) {
+  //       print('Failed to join room: $e');
+  //     }
+  //     throw WebRTCException('Failed to join room: $e');
+  //   }
+  // }
 
-  Future<void> leaveRoom(String roomId, {int? userId}) async {
-    try {
-      if (userId == null && _currentUser?.id == null) {
-        throw WebRTCException(
-            'User ID must be provided or current user must be set');
-      }
+  // Future<void> leaveRoom(String roomId, {int? userId}) async {
+  //   try {
+  //     if (userId == null && _currentUser?.id == null) {
+  //       throw WebRTCException(
+  //           'User ID must be provided or current user must be set');
+  //     }
 
-      final leaveData = {
-        'user_id': userId ?? _currentUser!.id,
-      };
+  //     final leaveData = {
+  //       'user_id': userId ?? _currentUser!.id,
+  //     };
 
-      await _httpClient.post('/rooms/$roomId/leave', leaveData);
+  //     await _httpClient.post('/rooms/$roomId/leave', leaveData);
 
-      _wsService.unsubscribeFromRoom(roomId);
-      _joinedRooms.remove(roomId);
+  //     _wsService.unsubscribeFromRoom(roomId);
+  //     _joinedRooms.remove(roomId);
 
-      _eventController.add(WebRTCClientEvent.roomLeft(roomId));
-    } catch (e) {
-      throw WebRTCException('Failed to leave room: $e');
-    }
-  }
+  //     _eventController.add(WebRTCClientEvent.roomLeft(roomId));
+  //   } catch (e) {
+  //     throw WebRTCException('Failed to leave room: $e');
+  //   }
+  // }
 
   Future<ChatMessage> sendMessage(
       String roomId, SendMessageOptions options) async {

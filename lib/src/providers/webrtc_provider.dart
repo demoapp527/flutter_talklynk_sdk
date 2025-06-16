@@ -162,19 +162,110 @@ class WebRTCProvider extends ChangeNotifier {
     return await _client.getRooms();
   }
 
+  // Override the existing joinRoom method to be more robust
+  @override
   Future<void> joinRoom(String roomId) async {
-    if (_currentUser == null) {
-      throw WebRTCException('Current user must be set before joining a room');
-    }
+    try {
+      if (_currentUser == null) {
+        throw Exception('No current user set. Please create a user first.');
+      }
 
-    await _client.joinRoom(roomId, userId: _currentUser!.id);
-    // Load existing messages
-    _loadMessages(roomId);
+      // Use the current user's external ID or database ID
+      final userId = _currentUser!.externalId ?? _currentUser!.id.toString();
+
+      final result = await _client.joinRoom(
+        roomId,
+        userId: userId,
+        userName: _currentUser!.name,
+        userEmail: _currentUser!.email,
+      );
+
+      _currentRoom = result.room;
+      _participants = result.participants;
+
+      notifyListeners();
+    } catch (e) {
+      print('Failed to join room: $e');
+      rethrow;
+    }
+  }
+
+  // Future<void> joinRoom(String roomId) async {
+  //   if (_currentUser == null) {
+  //     throw WebRTCException('Current user must be set before joining a room');
+  //   }
+
+  //   await _client.joinRoom(roomId, username: _currentUser!.name);
+  //   // Load existing messages
+  //   _loadMessages(roomId);
+  // }
+
+  Future<void> joinRoomWithUserData(
+    String roomId, {
+    required String userId,
+    String? userName,
+    String? userEmail,
+  }) async {
+    try {
+      await _client.joinRoom(
+        roomId,
+        userId: userId,
+        userName: userName,
+        userEmail: userEmail,
+      );
+    } catch (e) {
+      print('Failed to join room with user data: $e');
+      rethrow;
+    }
+  }
+
+  // Method to join room with username
+  Future<void> joinRoomWithUsername(String roomId, String username) async {
+    try {
+      await _client.joinRoomWithUsername(roomId, username);
+    } catch (e) {
+      print('Failed to join room with username: $e');
+      rethrow;
+    }
+  }
+
+  // Method to create user
+  Future<User> createUser({
+    required String name,
+    String? email,
+    String? externalId,
+  }) async {
+    try {
+      final user = await _client.createUser(
+        name: name,
+        email: email,
+        externalId: externalId,
+      );
+
+      setCurrentUser(user);
+      notifyListeners();
+
+      return user;
+    } catch (e) {
+      print('Failed to create user: $e');
+      rethrow;
+    }
+  }
+
+  // Method to get user by identifier
+  Future<User?> getUser(String identifier) async {
+    try {
+      return await _client.getUser(identifier);
+    } catch (e) {
+      print('Failed to get user: $e');
+      return null;
+    }
   }
 
   Future<void> leaveRoom() async {
     if (_currentRoom != null && _currentUser != null) {
-      await _client.leaveRoom(_currentRoom!.roomId, userId: _currentUser!.id);
+      await _client.leaveRoom(_currentRoom!.roomId,
+          username: _currentUser!.name);
     }
   }
 

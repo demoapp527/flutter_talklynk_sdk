@@ -201,7 +201,7 @@ class _ChatWidgetState extends State<ChatWidget> {
                 children: [
                   if (!isOwnMessage)
                     Text(
-                      message.user.name,
+                      message.user.name!,
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.bold,
@@ -235,10 +235,11 @@ class _ChatWidgetState extends State<ChatWidget> {
     return CircleAvatar(
       radius: 16,
       backgroundColor: isOwn ? Colors.blue : Colors.grey.shade300,
-      backgroundImage: user.avatar != null ? NetworkImage(user.avatar!) : null,
-      child: user.avatar == null
+      backgroundImage:
+          user.avatarUrl != null ? NetworkImage(user.avatarUrl!) : null,
+      child: user.avatarUrl == null
           ? Text(
-              user.name[0].toUpperCase(),
+              user.name![0].toUpperCase(),
               style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.bold,
