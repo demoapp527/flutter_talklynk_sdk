@@ -1,26 +1,17 @@
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
-import 'package:talklynk_sdk/talklynk_sdk.dart';
+
+import '../models/models.dart';
 
 class ChatWidget extends StatefulWidget {
+  final TalkLynkRoom room;
   final List<ChatMessage> messages;
   final Function(String) onSendMessage;
-  final Function(String)? onSendFile;
-  final Function(bool)? onTypingChanged;
-  final User? currentUser;
-  final String? roomId;
-  final bool isLoading;
 
   const ChatWidget({
     Key? key,
+    required this.room,
     required this.messages,
     required this.onSendMessage,
-    this.onSendFile,
-    this.onTypingChanged,
-    this.currentUser,
-    this.roomId,
-    this.isLoading = false,
   }) : super(key: key);
 
   @override
@@ -30,40 +21,19 @@ class ChatWidget extends StatefulWidget {
 class _ChatWidgetState extends State<ChatWidget> {
   final TextEditingController _messageController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
-  final ImagePicker _imagePicker = ImagePicker();
   bool _isTyping = false;
 
   @override
   void initState() {
     super.initState();
-    _messageController.addListener(_onTextChanged);
-  }
-
-  @override
-  void dispose() {
-    _messageController.removeListener(_onTextChanged);
-    _messageController.dispose();
-    _scrollController.dispose();
-    super.dispose();
-  }
-
-  void _onTextChanged() {
-    final isCurrentlyTyping = _messageController.text.isNotEmpty;
-    if (isCurrentlyTyping != _isTyping) {
-      _isTyping = isCurrentlyTyping;
-      widget.onTypingChanged?.call(_isTyping);
-    }
+    _scrollToBottom();
   }
 
   @override
   void didUpdateWidget(ChatWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
-
-    // Auto-scroll to bottom when new messages arrive
-    if (widget.messages.length > oldWidget.messages.length) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _scrollToBottom();
-      });
+    if (widget.messages.length != oldWidget.messages.length) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
     }
   }
 
@@ -71,421 +41,115 @@ class _ChatWidgetState extends State<ChatWidget> {
     if (_scrollController.hasClients) {
       _scrollController.animateTo(
         _scrollController.position.maxScrollExtent,
-        duration: const Duration(milliseconds: 300),
+        duration: Duration(milliseconds: 300),
         curve: Curves.easeOut,
-      );
-    }
-  }
-
-  void _sendMessage() {
-    final message = _messageController.text.trim();
-    if (message.isNotEmpty) {
-      widget.onSendMessage(message);
-      _messageController.clear();
-      // Clear typing indicator
-      if (_isTyping) {
-        _isTyping = false;
-        widget.onTypingChanged?.call(false);
-      }
-    }
-  }
-
-  Future<void> _pickAndSendImage() async {
-    try {
-      final XFile? image = await _imagePicker.pickImage(
-        source: ImageSource.gallery,
-        maxWidth: 1024,
-        maxHeight: 1024,
-        imageQuality: 80,
-      );
-
-      if (image != null && widget.onSendFile != null) {
-        widget.onSendFile!(image.path);
-      }
-    } catch (e) {
-      _showError('Failed to pick image: $e');
-    }
-  }
-
-  Future<void> _pickAndSendFile() async {
-    try {
-      final FilePickerResult? result = await FilePicker.platform.pickFiles(
-        type: FileType.any,
-        allowMultiple: false,
-        withData: false, // Don't load file data into memory
-      );
-
-      if (result != null &&
-          result.files.isNotEmpty &&
-          widget.onSendFile != null) {
-        final file = result.files.first;
-        if (file.path != null) {
-          widget.onSendFile!(file.path!);
-        }
-      }
-    } catch (e) {
-      _showError('Failed to pick file: $e');
-    }
-  }
-
-  void _showError(String message) {
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(message),
-          backgroundColor: Colors.red,
-        ),
       );
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        // Messages list
-        Expanded(
-          child: widget.isLoading
-              ? const Center(child: CircularProgressIndicator())
-              : widget.messages.isEmpty
-                  ? const Center(
-                      child: Text(
-                        'No messages yet. Start the conversation!',
-                        style: TextStyle(
-                          color: Colors.grey,
-                          fontSize: 16,
-                        ),
-                      ),
-                    )
-                  : ListView.builder(
-                      controller: _scrollController,
-                      padding: const EdgeInsets.all(16),
-                      itemCount: widget.messages.length,
-                      itemBuilder: (context, index) {
-                        return _buildMessageBubble(widget.messages[index]);
-                      },
-                    ),
-        ),
-
-        // Message input
-        _buildMessageInput(),
-      ],
-    );
-  }
-
-  Widget _buildMessageBubble(ChatMessage message) {
-    final isOwnMessage = message.user.id == widget.currentUser?.id;
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        mainAxisAlignment:
-            isOwnMessage ? MainAxisAlignment.end : MainAxisAlignment.start,
-        children: [
-          if (!isOwnMessage) ...[
-            _buildAvatar(message.user),
-            const SizedBox(width: 8),
-          ],
-          Flexible(
-            child: Container(
-              constraints: BoxConstraints(
-                maxWidth: MediaQuery.of(context).size.width * 0.7,
-              ),
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              decoration: BoxDecoration(
-                color: isOwnMessage ? Colors.blue : Colors.grey.shade200,
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (!isOwnMessage)
-                    Text(
-                      message.user.name!,
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.grey.shade600,
-                      ),
-                    ),
-                  _buildMessageContent(message, isOwnMessage),
-                  const SizedBox(height: 4),
-                  Text(
-                    _formatTime(message.createdAt),
-                    style: TextStyle(
-                      fontSize: 10,
-                      color:
-                          isOwnMessage ? Colors.white70 : Colors.grey.shade600,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          if (isOwnMessage) ...[
-            const SizedBox(width: 8),
-            _buildAvatar(message.user, isOwn: true),
-          ],
-        ],
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.grey[900],
+        border: Border(left: BorderSide(color: Colors.grey[700]!)),
       ),
-    );
-  }
-
-  Widget _buildAvatar(User user, {bool isOwn = false}) {
-    return CircleAvatar(
-      radius: 16,
-      backgroundColor: isOwn ? Colors.blue : Colors.grey.shade300,
-      backgroundImage:
-          user.avatarUrl != null ? NetworkImage(user.avatarUrl!) : null,
-      child: user.avatarUrl == null
-          ? Text(
-              user.name![0].toUpperCase(),
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-                color: isOwn ? Colors.white : Colors.black,
-              ),
-            )
-          : null,
-    );
-  }
-
-  Widget _buildMessageContent(ChatMessage message, bool isOwnMessage) {
-    switch (message.type) {
-      case MessageType.text:
-        return Text(
-          message.message,
-          style: TextStyle(
-            fontSize: 16,
-            color: isOwnMessage ? Colors.white : Colors.black87,
-          ),
-        );
-
-      case MessageType.image:
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (message.metadata?['file_path'] != null) ...[
-              Container(
-                constraints: const BoxConstraints(maxHeight: 200),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: Image.network(
-                    _getFileUrl(message.metadata!['file_path']),
-                    fit: BoxFit.cover,
-                    loadingBuilder: (context, child, loadingProgress) {
-                      if (loadingProgress == null) return child;
-                      return Container(
-                        height: 100,
-                        child: Center(
-                          child: CircularProgressIndicator(
-                            value: loadingProgress.expectedTotalBytes != null
-                                ? loadingProgress.cumulativeBytesLoaded /
-                                    loadingProgress.expectedTotalBytes!
-                                : null,
-                          ),
-                        ),
-                      );
-                    },
-                    errorBuilder: (context, error, stackTrace) => Container(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        children: [
-                          const Icon(Icons.broken_image, size: 48),
-                          const Text('Failed to load image'),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              if (message.message.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                Text(
-                  message.message,
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: isOwnMessage ? Colors.white : Colors.black87,
-                  ),
-                ),
-              ],
-            ] else
-              Text(
-                message.message,
-                style: TextStyle(
-                  fontSize: 16,
-                  color: isOwnMessage ? Colors.white : Colors.black87,
-                ),
-              ),
-          ],
-        );
-
-      case MessageType.file:
-        return GestureDetector(
-          onTap: () => _downloadFile(message),
-          child: Container(
-            padding: const EdgeInsets.all(12),
+      child: Column(
+        children: [
+          // Chat header
+          Container(
+            height: 60,
+            padding: EdgeInsets.symmetric(horizontal: 16),
             decoration: BoxDecoration(
-              color: isOwnMessage
-                  ? Colors.white.withOpacity(0.2)
-                  : Colors.grey.shade100,
-              borderRadius: BorderRadius.circular(8),
+              border: Border(bottom: BorderSide(color: Colors.grey[700]!)),
             ),
             child: Row(
-              mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(
-                  _getFileIcon(message.metadata?['file_type']),
-                  color: isOwnMessage ? Colors.white : Colors.grey.shade600,
+                Icon(Icons.chat, color: Colors.white),
+                SizedBox(width: 8),
+                Text(
+                  'Chat',
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold),
                 ),
-                const SizedBox(width: 8),
-                Flexible(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        message.metadata?['original_name'] ?? 'File',
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: isOwnMessage ? Colors.white : Colors.black87,
-                          decoration: TextDecoration.underline,
-                        ),
-                      ),
-                      if (message.metadata?['file_size'] != null)
-                        Text(
-                          _formatFileSize(message.metadata!['file_size']),
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: isOwnMessage
-                                ? Colors.white70
-                                : Colors.grey.shade600,
-                          ),
-                        ),
-                    ],
-                  ),
+                Spacer(),
+                Text(
+                  '${widget.messages.length} messages',
+                  style: TextStyle(color: Colors.grey[400], fontSize: 12),
                 ),
               ],
             ),
           ),
-        );
 
-      default:
-        return Text(
-          message.message,
-          style: TextStyle(
-            fontSize: 16,
-            color: isOwnMessage ? Colors.white : Colors.black87,
-          ),
-        );
-    }
-  }
-
-  String _getFileUrl(String filePath) {
-    // Construct the full URL for the file
-    if (filePath.startsWith('http')) {
-      return filePath;
-    }
-    // Assuming your Laravel app serves files from storage/public
-    return 'https://api.talklynk.com/storage/$filePath';
-  }
-
-  IconData _getFileIcon(String? mimeType) {
-    if (mimeType == null) return Icons.attach_file;
-
-    if (mimeType.startsWith('image/')) return Icons.image;
-    if (mimeType.startsWith('video/')) return Icons.video_file;
-    if (mimeType.startsWith('audio/')) return Icons.audio_file;
-    if (mimeType.contains('pdf')) return Icons.picture_as_pdf;
-    if (mimeType.contains('word') || mimeType.contains('document'))
-      return Icons.description;
-    if (mimeType.contains('excel') || mimeType.contains('spreadsheet'))
-      return Icons.table_chart;
-    if (mimeType.contains('zip') || mimeType.contains('rar'))
-      return Icons.archive;
-
-    return Icons.attach_file;
-  }
-
-  String _formatFileSize(dynamic size) {
-    if (size == null) return '';
-
-    final bytes = size is String ? int.tryParse(size) ?? 0 : size as int;
-
-    if (bytes < 1024) return '${bytes}B';
-    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)}KB';
-    if (bytes < 1024 * 1024 * 1024)
-      return '${(bytes / (1024 * 1024)).toStringAsFixed(1)}MB';
-    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)}GB';
-  }
-
-  void _downloadFile(ChatMessage message) {
-    // Implement file download logic
-    final filePath = message.metadata?['file_path'];
-    if (filePath != null) {
-      // You can implement file download here
-      _showError('File download not implemented yet');
-    }
-  }
-
-  Widget _buildMessageInput() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border(
-          top: BorderSide(color: Colors.grey.shade300),
-        ),
-      ),
-      child: Row(
-        children: [
-          // Attachment button
-          IconButton(
-            onPressed:
-                widget.currentUser != null ? _showAttachmentOptions : null,
-            icon: const Icon(Icons.attach_file),
-            color: Colors.grey.shade600,
-          ),
-
-          // Message input
+          // Messages list
           Expanded(
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              decoration: BoxDecoration(
-                color: Colors.grey.shade100,
-                borderRadius: BorderRadius.circular(25),
-              ),
-              child: TextField(
-                controller: _messageController,
-                enabled: widget.currentUser != null,
-                decoration: InputDecoration(
-                  hintText: widget.currentUser != null
-                      ? 'Type a message...'
-                      : 'Set current user to send messages',
-                  border: InputBorder.none,
-                ),
-                maxLines: null,
-                textCapitalization: TextCapitalization.sentences,
-                onSubmitted: (_) => _sendMessage(),
-              ),
+            child: ListView.builder(
+              controller: _scrollController,
+              padding: EdgeInsets.all(8),
+              itemCount: widget.messages.length,
+              itemBuilder: (context, index) {
+                final message = widget.messages[index];
+                final isOwn = message.senderId == widget.room.currentUser.id;
+                return _buildMessageBubble(message, isOwn);
+              },
             ),
           ),
 
-          const SizedBox(width: 8),
+          // Typing indicator
+          if (_isTyping)
+            Container(
+              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              child: Text(
+                'Someone is typing...',
+                style: TextStyle(
+                    color: Colors.grey[400],
+                    fontSize: 12,
+                    fontStyle: FontStyle.italic),
+              ),
+            ),
 
-          // Send button
-          GestureDetector(
-            onTap: widget.currentUser != null ? _sendMessage : null,
-            child: Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: widget.currentUser != null ? Colors.blue : Colors.grey,
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(
-                Icons.send,
-                color: Colors.white,
-                size: 20,
-              ),
+          // Message input
+          Container(
+            padding: EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              border: Border(top: BorderSide(color: Colors.grey[700]!)),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _messageController,
+                    style: TextStyle(color: Colors.white),
+                    decoration: InputDecoration(
+                      hintText: 'Type a message...',
+                      hintStyle: TextStyle(color: Colors.grey[400]),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(20),
+                        borderSide: BorderSide(color: Colors.grey[600]!),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(20),
+                        borderSide: BorderSide(color: Colors.grey[600]!),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(20),
+                        borderSide: BorderSide(color: Colors.blue),
+                      ),
+                      contentPadding:
+                          EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    ),
+                    onChanged: _onMessageChanged,
+                    onSubmitted: _sendMessage,
+                  ),
+                ),
+                SizedBox(width: 8),
+                IconButton(
+                  onPressed: () => _sendMessage(_messageController.text),
+                  icon: Icon(Icons.send, color: Colors.blue),
+                ),
+              ],
             ),
           ),
         ],
@@ -493,29 +157,41 @@ class _ChatWidgetState extends State<ChatWidget> {
     );
   }
 
-  void _showAttachmentOptions() {
-    showModalBottomSheet(
-      context: context,
-      builder: (context) => Container(
-        padding: const EdgeInsets.all(20),
+  Widget _buildMessageBubble(ChatMessage message, bool isOwn) {
+    return Align(
+      alignment: isOwn ? Alignment.centerRight : Alignment.centerLeft,
+      child: Container(
+        margin: EdgeInsets.symmetric(vertical: 2),
+        padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        constraints: BoxConstraints(maxWidth: 250),
+        decoration: BoxDecoration(
+          color: isOwn ? Colors.blue : Colors.grey[700],
+          borderRadius: BorderRadius.circular(12),
+        ),
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            ListTile(
-              leading: const Icon(Icons.photo, color: Colors.blue),
-              title: const Text('Photo'),
-              onTap: () {
-                Navigator.pop(context);
-                _pickAndSendImage();
-              },
+            if (!isOwn)
+              Text(
+                message.senderName,
+                style: TextStyle(
+                  color: Colors.grey[300],
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            Text(
+              message.message,
+              style: TextStyle(color: Colors.white),
             ),
-            ListTile(
-              leading: const Icon(Icons.attach_file, color: Colors.green),
-              title: const Text('File'),
-              onTap: () {
-                Navigator.pop(context);
-                _pickAndSendFile();
-              },
+            SizedBox(height: 2),
+            Text(
+              _formatTime(message.timestamp),
+              style: TextStyle(
+                color: Colors.grey[300],
+                fontSize: 10,
+              ),
             ),
           ],
         ),
@@ -523,18 +199,39 @@ class _ChatWidgetState extends State<ChatWidget> {
     );
   }
 
-  String _formatTime(DateTime dateTime) {
+  String _formatTime(DateTime time) {
     final now = DateTime.now();
-    final difference = now.difference(dateTime);
+    final diff = now.difference(time);
 
-    if (difference.inDays > 0) {
-      return '${dateTime.day}/${dateTime.month}';
-    } else if (difference.inHours > 0) {
-      return '${difference.inHours}h ago';
-    } else if (difference.inMinutes > 0) {
-      return '${difference.inMinutes}m ago';
-    } else {
-      return 'now';
+    if (diff.inMinutes < 1) return 'now';
+    if (diff.inHours < 1) return '${diff.inMinutes}m';
+    if (diff.inDays < 1) return '${diff.inHours}h';
+    return '${diff.inDays}d';
+  }
+
+  void _onMessageChanged(String text) {
+    if (text.isNotEmpty && !_isTyping) {
+      _isTyping = true;
+      widget.room.sendTypingIndicator(true);
+    } else if (text.isEmpty && _isTyping) {
+      _isTyping = false;
+      widget.room.sendTypingIndicator(false);
     }
+  }
+
+  void _sendMessage(String text) {
+    if (text.trim().isNotEmpty) {
+      widget.onSendMessage(text.trim());
+      _messageController.clear();
+      _isTyping = false;
+      widget.room.sendTypingIndicator(false);
+    }
+  }
+
+  @override
+  void dispose() {
+    _messageController.dispose();
+    _scrollController.dispose();
+    super.dispose();
   }
 }

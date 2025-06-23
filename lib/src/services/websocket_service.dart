@@ -1,11 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
+import 'package:http/http.dart' as http;
 import 'package:logger/logger.dart';
 import 'package:talklynk_sdk/talklynk_sdk.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 class WebSocketService {
+  final String baseUrl;
   final String wsUrl;
   final String apiKey;
   final String pusherAppKey;
@@ -25,6 +28,7 @@ class WebSocketService {
   String? _socketId;
 
   WebSocketService({
+    required this.baseUrl,
     required this.wsUrl,
     required this.apiKey,
     required this.pusherAppKey,
@@ -165,42 +169,145 @@ class WebSocketService {
     _emitEvent('connection:disconnected', {});
   }
 
-  void subscribeToRoom(String roomId) {
+// Update your _authenticateChannel to catch and log the specific error
+  Future<Map<String, dynamic>> _authenticateChannel(String channelName) async {
+    try {
+      if (_socketId == null) {
+        throw Exception('Socket ID not available for authentication');
+      }
+
+      _logger.d('🔐 Starting authentication for channel: $channelName');
+      _logger.d('🔐 Socket ID: $_socketId');
+      _logger.d('🔐 API Key: ${apiKey.substring(0, 10)}...');
+      _logger.d('🔐 Original WS URL: $wsUrl');
+
+      final authUrl = '$baseUrl/broadcasting/auth';
+
+      _logger.d('🔐 Constructed auth URL: $authUrl');
+
+      final requestBody = {
+        'socket_id': _socketId!,
+        'channel_name': channelName,
+        'api_key': apiKey,
+      };
+
+      _logger.d('🔐 Making HTTP request...');
+
+      final response = await http
+          .post(
+            Uri.parse(authUrl),
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+              'Accept': 'application/json',
+              'User-Agent': 'Flutter-TalkLynk-SDK/1.0',
+            },
+            body: requestBody,
+          )
+          .timeout(Duration(seconds: 10)); // Add timeout
+
+      _logger.d('🔐 HTTP request completed');
+      _logger.d('🔐 Auth response status: ${response.statusCode}');
+      _logger.d('🔐 Auth response body: ${response.body}');
+
+      if (response.statusCode == 200) {
+        final authData = jsonDecode(response.body);
+        _logger.d('✅ Authentication successful');
+        return authData;
+      } else {
+        throw Exception('HTTP ${response.statusCode}: ${response.body}');
+      }
+    } on TimeoutException catch (e) {
+      _logger.e('⏰ Authentication timeout: $e');
+      rethrow;
+    } on SocketException catch (e) {
+      _logger.e('🌐 Network error: $e');
+      rethrow;
+    } on FormatException catch (e) {
+      _logger.e('📝 JSON parsing error: $e');
+      rethrow;
+    } catch (e, stackTrace) {
+      _logger.e('❌ Authentication error: $e');
+      _logger.e('❌ Error type: ${e.runtimeType}');
+      _logger.e('❌ Stack trace: $stackTrace');
+      rethrow;
+    }
+  }
+
+// Also update subscribeToRoom to handle auth failures gracefully
+  void subscribeToRoom(String roomId) async {
     if (!_isConnected) {
       _logger.w('Cannot subscribe: WebSocket not connected');
       return;
     }
 
-    final channelName = 'presence-room.$roomId';
+    final channelName = 'private-room.$roomId';
 
     if (_subscribedChannels.contains(channelName)) {
       _logger.d('Already subscribed to room: $roomId');
       return;
     }
 
-    _logger.d('Subscribing to room: $roomId');
+    _logger.d(
+        '🚀 Starting subscription to room: $roomId on channel: $channelName');
 
-    _sendMessage({
-      'event': 'pusher:subscribe',
-      'data': {
+    try {
+      // Get authentication data
+      _logger.d('🔐 Getting authentication...');
+      final authData = await _authenticateChannel(channelName);
+
+      final subscribeData = {
         'channel': channelName,
-        'auth': _generateAuthToken(channelName),
-        'channel_data': jsonEncode({
-          'user_id': 'flutter_user',
-          'user_info': {
-            'api_key': apiKey,
-          }
-        }),
-      }
-    });
+        'auth': authData['auth'],
+      };
 
-    _subscribedChannels.add(channelName);
+      // Add channel_data if provided
+      if (authData.containsKey('channel_data')) {
+        subscribeData['channel_data'] = authData['channel_data'];
+      }
+
+      _logger.d('📡 Sending subscription message: $subscribeData');
+
+      _sendMessage({
+        'event': 'pusher:subscribe',
+        'data': subscribeData,
+      });
+
+      _subscribedChannels.add(channelName);
+      _logger.d('✅ Subscription request sent for: $channelName');
+    } catch (e, stackTrace) {
+      _logger.e('💥 Failed to subscribe to room: $e');
+      _logger.e('💥 Stack trace: $stackTrace');
+
+      // Try fallback without authentication for debugging
+      _logger.w('🔄 Trying fallback subscription without auth...');
+      try {
+        _sendMessage({
+          'event': 'pusher:subscribe',
+          'data': {
+            'channel': channelName,
+            'auth': '$_socketId:$apiKey', // Simple auth fallback
+          }
+        });
+        _subscribedChannels.add(channelName);
+        _logger.w(
+            '⚠️ Fallback subscription sent (may not work for private channels)');
+      } catch (fallbackError) {
+        _logger.e('💥 Even fallback failed: $fallbackError');
+      }
+
+      // Emit subscription error
+      _emitEvent('subscription:error', {
+        'room_id': roomId,
+        'channel': channelName,
+        'error': e.toString(),
+      });
+    }
   }
 
   void unsubscribeFromRoom(String roomId) {
     if (!_isConnected) return;
 
-    final channelName = 'presence-room.$roomId';
+    final channelName = 'private-room.$roomId';
 
     if (!_subscribedChannels.contains(channelName)) {
       return;
@@ -248,69 +355,108 @@ class WebSocketService {
 
   void _handleMessage(dynamic message) {
     try {
-      _logger.d('Raw WebSocket message: $message');
+      // Log EVERY message - even before parsing
+      _logger.d('🔍 RAW WebSocket message received: $message');
 
       final data = jsonDecode(message) as Map<String, dynamic>;
       final eventType = data['event'] as String?;
       final channelName = data['channel'] as String?;
       final eventDataRaw = data['data'];
 
-      _logger.d('Parsed WebSocket event: $eventType on channel: $channelName');
+      _logger
+          .d('📡 Parsed WebSocket - Event: $eventType, Channel: $channelName');
+
+      // Special logging for user.joined events
+      if (eventType == 'user.joined') {
+        _logger.d('🎉 RECEIVED user.joined EVENT!');
+        _logger.d('🎉 Channel: $channelName');
+        _logger.d('🎉 Data: $eventDataRaw');
+      }
+
+      // Special logging for chat.message events
+      if (eventType == 'chat.message') {
+        _logger.d('💬 RECEIVED chat.message EVENT!');
+        _logger.d('💬 Channel: $channelName');
+        _logger.d('💬 Data: $eventDataRaw');
+      }
 
       // Parse event data if it's a JSON string
       dynamic eventData;
       if (eventDataRaw is String) {
         try {
           eventData = jsonDecode(eventDataRaw);
+          _logger.d('📦 Parsed event data from JSON string: $eventData');
         } catch (e) {
           eventData = eventDataRaw;
+          _logger.d('📦 Event data as string: $eventData');
         }
       } else {
         eventData = eventDataRaw;
+        _logger.d('📦 Event data as object: $eventData');
       }
 
-      // Handle Pusher protocol events - check for both colon and dot notation
+      // Handle Pusher protocol events
       if (eventType != null) {
-        // Normalize event names (replace dots with colons for consistent handling)
         final normalizedEventType = eventType.replaceAll('.', ':');
 
         switch (normalizedEventType) {
           case 'pusher:connection_established':
+            _logger.d('✅ Pusher connection established');
             _handleConnectionEstablished(eventData);
-            return; // Return early to avoid application event handling
+            return;
 
           case 'pusher:pong':
-            _logger.d('Received heartbeat pong');
+            _logger.d('💓 Received heartbeat pong');
             return;
 
           case 'pusher:error':
+            _logger.e('❌ Pusher error received');
             _handlePusherError(eventData);
             return;
 
+          case 'pusher:subscribe:response':
+            _logger.d('📝 Subscription response: $eventData');
+            return;
+
           case 'pusher_internal:subscription_succeeded':
+            _logger.d('🎉 Subscription succeeded for: $channelName');
             _handleSubscriptionSucceeded(channelName, eventData);
             return;
 
           case 'pusher_internal:subscription_error':
+            _logger.e('💥 Subscription error for: $channelName');
             _handleSubscriptionError(channelName, eventData);
             return;
 
           case 'pusher_internal:member_added':
+            _logger.d('👤 Member added to: $channelName');
             _handleMemberAdded(channelName, eventData);
             return;
 
           case 'pusher_internal:member_removed':
+            _logger.d('👤 Member removed from: $channelName');
             _handleMemberRemoved(channelName, eventData);
             return;
         }
       }
 
-      // If we reach here, it's an application event
+      // Log all non-Pusher events
       if (eventType != null && !eventType.startsWith('pusher')) {
+        _logger.d('🎯 APPLICATION EVENT RECEIVED!');
+        _logger.d('   Event Type: $eventType');
+        _logger.d('   Channel: $channelName');
+        _logger.d('   Data: $eventData');
+
         _handleApplicationEvent(eventType, channelName, eventData);
+      } else if (eventType != null) {
+        _logger.d('🔧 Pusher system event: $eventType');
+      } else {
+        _logger.w('❓ Event with no type: $data');
       }
-    } catch (e) {
-      _logger.e('Failed to parse WebSocket message: $e');
+    } catch (e, stackTrace) {
+      _logger.e('💥 Failed to parse WebSocket message: $e');
+      _logger.e('Stack trace: $stackTrace');
+      _logger.e('Raw message was: $message');
     }
   }
 
@@ -347,8 +493,8 @@ class WebSocketService {
   void _handleSubscriptionSucceeded(String? channelName, dynamic data) {
     _logger.d('Subscription succeeded for channel: $channelName');
 
-    if (channelName != null && channelName.startsWith('presence-room.')) {
-      final roomId = channelName.replaceFirst('presence-room.', '');
+    if (channelName != null && channelName.startsWith('private-room.')) {
+      final roomId = channelName.replaceFirst('private-room.', '');
 
       _emitEvent('room:subscription_succeeded', {
         'room_id': roomId,
@@ -372,8 +518,8 @@ class WebSocketService {
   }
 
   void _handleMemberAdded(String? channelName, dynamic data) {
-    if (channelName != null && channelName.startsWith('presence-room.')) {
-      final roomId = channelName.replaceFirst('presence-room.', '');
+    if (channelName != null && channelName.startsWith('private-room.')) {
+      final roomId = channelName.replaceFirst('private-room.', '');
 
       _emitEvent('user.joined', {
         'room_id': roomId,
@@ -383,8 +529,8 @@ class WebSocketService {
   }
 
   void _handleMemberRemoved(String? channelName, dynamic data) {
-    if (channelName != null && channelName.startsWith('presence-room.')) {
-      final roomId = channelName.replaceFirst('presence-room.', '');
+    if (channelName != null && channelName.startsWith('private-room.')) {
+      final roomId = channelName.replaceFirst('private-room.', '');
 
       _emitEvent('user.left', {
         'room_id': roomId,
@@ -396,36 +542,46 @@ class WebSocketService {
   void _handleApplicationEvent(
       String eventType, String? channelName, dynamic eventData) {
     try {
-      _logger.d('Application event: $eventType with data: $eventData');
+      _logger.d('🚀 Processing application event: $eventType');
+      _logger.d('   Channel: $channelName');
+      _logger.d('   Data: $eventData');
 
-      // Map Laravel broadcasting events to application events
+      // Map event types
       String mappedEventType = eventType;
 
-      switch (eventType) {
-        case 'user.joined':
-        case 'user.left':
-        case 'chat.message':
-        case 'call.started':
-        case 'call.ended':
-        case 'webrtc.offer':
-        case 'webrtc.answer':
-        case 'webrtc.ice-candidate':
-        case 'typing.indicator':
-          mappedEventType = eventType;
-          break;
-        case 'client-webrtc-signal':
-          mappedEventType = 'webrtc.signal';
-          break;
+      // Extract room_id from channel name
+      String? roomId;
+      if (channelName != null && channelName.startsWith('private-room.')) {
+        roomId = channelName.replaceFirst('private-room.', '');
+        _logger.d('   Extracted room_id: $roomId');
       }
 
-      _emitEvent(mappedEventType, {
+      // Prepare final event data
+      Map<String, dynamic> finalEventData = {
         'event': mappedEventType,
         'channel': channelName,
-        'data': eventData,
-        ...eventData is Map<String, dynamic> ? eventData : {},
+        'room_id': roomId,
+      };
+
+      if (eventData is Map<String, dynamic>) {
+        finalEventData.addAll(eventData);
+      } else {
+        finalEventData['data'] = eventData;
+      }
+
+      _logger.d('🎉 Emitting event: $mappedEventType');
+      _logger.d('   Final data: $finalEventData');
+
+      _emitEvent(mappedEventType, finalEventData);
+
+      // Also emit to any general listeners
+      _emitEvent('*', {
+        'event': mappedEventType,
+        'data': finalEventData,
       });
-    } catch (e) {
-      _logger.e('Error handling application event: $e');
+    } catch (e, stackTrace) {
+      _logger.e('💥 Error in _handleApplicationEvent: $e');
+      _logger.e('Stack trace: $stackTrace');
     }
   }
 

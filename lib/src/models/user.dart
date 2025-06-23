@@ -1,107 +1,61 @@
-class User {
-  final int id;
-  final String? name;
-  final String? email;
-  final String? externalId;
-  final String? avatarUrl;
-  final Map<String, dynamic>? metadata;
-  final String? status;
-  final DateTime? lastSeenAt;
-  final DateTime? createdAt;
-  final DateTime? updatedAt;
+import 'package:talklynk_sdk/src/models/enums.dart';
 
-  const User({
+class TalkLynkUser {
+  final String id;
+  final String username;
+  final String displayName;
+  final UserRole role;
+  final DateTime joinedAt;
+  final bool isOnline;
+  final Map<String, dynamic> metadata;
+
+  TalkLynkUser({
     required this.id,
-    this.name,
-    this.email,
-    this.externalId,
-    this.avatarUrl,
-    this.metadata,
-    this.status,
-    this.lastSeenAt,
-    this.createdAt,
-    this.updatedAt,
+    required this.username,
+    required this.displayName,
+    required this.role,
+    required this.joinedAt,
+    this.isOnline = true,
+    this.metadata = const {},
   });
 
-  factory User.fromJson(Map<String, dynamic> json) {
-    return User(
-      id: json['id'] as int,
-      name: json['name'] as String?,
-      email: json['email'] as String?,
-      externalId: json['external_id'] as String?,
-      avatarUrl: json['avatar_url'] as String?,
-      metadata: json['metadata'] as Map<String, dynamic>?,
-      status: json['status'] as String?,
-      lastSeenAt: json['last_seen_at'] != null
-          ? DateTime.parse(json['last_seen_at'] as String)
-          : null,
-      createdAt: json['created_at'] != null
-          ? DateTime.parse(json['created_at'] as String)
-          : null,
-      updatedAt: json['updated_at'] != null
-          ? DateTime.parse(json['updated_at'] as String)
-          : null,
+  factory TalkLynkUser.fromJson(Map<String, dynamic> json) {
+    return TalkLynkUser(
+      id: json['id'].toString(),
+      username: json['username'] ?? json['name'] ?? 'Unknown',
+      displayName:
+          json['display_name'] ?? json['name'] ?? json['username'] ?? 'Unknown',
+      role: _parseUserRole(json['role'] ?? 'participant'),
+      joinedAt: DateTime.tryParse(json['joined_at'] ?? '') ?? DateTime.now(),
+      isOnline: json['is_online'] ?? true,
+      metadata: json['metadata'] ?? {},
     );
   }
+
+  static UserRole _parseUserRole(String role) {
+    switch (role.toLowerCase()) {
+      case 'admin':
+        return UserRole.admin;
+      case 'moderator':
+        return UserRole.moderator;
+      default:
+        return UserRole.participant;
+    }
+  }
+
+  bool get isAdmin => role == UserRole.admin;
+  bool get isModerator => role == UserRole.moderator;
+  bool get canKick => isAdmin || isModerator;
 
   Map<String, dynamic> toJson() {
     return {
       'id': id,
-      'name': name,
-      'email': email,
-      'external_id': externalId,
-      'avatar_url': avatarUrl,
+      'username': username,
+      'display_name': displayName,
+      'role': role.toString().split('.').last,
+      'joined_at': joinedAt.toIso8601String(),
+      'is_online': isOnline,
       'metadata': metadata,
-      'status': status,
-      'last_seen_at': lastSeenAt?.toIso8601String(),
-      'created_at': createdAt?.toIso8601String(),
-      'updated_at': updatedAt?.toIso8601String(),
     };
-  }
-
-  User copyWith({
-    int? id,
-    String? name,
-    String? email,
-    String? externalId,
-    String? avatarUrl,
-    Map<String, dynamic>? metadata,
-    String? status,
-    DateTime? lastSeenAt,
-    DateTime? createdAt,
-    DateTime? updatedAt,
-  }) {
-    return User(
-      id: id ?? this.id,
-      name: name ?? this.name,
-      email: email ?? this.email,
-      externalId: externalId ?? this.externalId,
-      avatarUrl: avatarUrl ?? this.avatarUrl,
-      metadata: metadata ?? this.metadata,
-      status: status ?? this.status,
-      lastSeenAt: lastSeenAt ?? this.lastSeenAt,
-      createdAt: createdAt ?? this.createdAt,
-      updatedAt: updatedAt ?? this.updatedAt,
-    );
-  }
-
-  String get displayName => name ?? email ?? 'User $id';
-
-  bool get isOnline {
-    if (lastSeenAt == null) return false;
-    return DateTime.now().difference(lastSeenAt!).inMinutes <= 5;
-  }
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is User && runtimeType == other.runtimeType && id == other.id;
-
-  @override
-  int get hashCode => id.hashCode;
-
-  @override
-  String toString() {
-    return 'User{id: $id, name: $name, email: $email, externalId: $externalId}';
   }
 }
